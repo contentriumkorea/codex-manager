@@ -11,6 +11,12 @@ from .rpc import CodexClient, find_cli, RpcError
 from .portability import prepare_rollout
 
 
+def version_tuple(value):
+    import re
+    match=re.search(r'(\d+)\.(\d+)\.(\d+)',value)
+    return tuple(int(x) for x in match.groups()) if match else (0,0,0)
+
+
 def desktop_running():
     if os.name!='nt': return False
     script="@(Get-CimInstance Win32_Process -Filter \"Name='codex.exe'\" | Where-Object { $_.CommandLine -match 'app-server' -and $_.CommandLine -notmatch '--listen' }).Count"
@@ -24,6 +30,7 @@ def desktop_running():
 class CodexAdapter:
     def __init__(self, home: Path, isolated=False):
         self.home=home.resolve();self.isolated=isolated
+        self._server_version=None
         if isolated and self.home==Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex'))).resolve():
             raise ValueError('격리 테스트 경로가 실제 Codex 저장소와 같습니다.')
 
@@ -32,6 +39,14 @@ class CodexAdapter:
     def ensure_write_allowed(self):
         if not self.isolated and desktop_running():
             raise RuntimeError('프로젝트 연결 변경은 Codex 앱을 완전히 종료한 뒤 실행하세요. 조회와 백업은 지금 사용할 수 있습니다.')
+        if version_tuple(self.server_version())<(0,160,0):
+            raise RuntimeError('Codex 0.160.0 이상의 앱 실행 파일이 필요합니다. 현재 버전에서는 조회·백업만 사용할 수 있습니다.')
+
+    def server_version(self):
+        if self._server_version is None:
+            self._server_version=subprocess.run([find_cli(),'--version'],capture_output=True,text=True,
+                            creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),timeout=15).stdout.strip()
+        return self._server_version
 
     def call(self, method, params):
         return self.calls([(method,params)])[0]
@@ -49,10 +64,9 @@ class CodexAdapter:
             return [client.call(method,params) for method,params in requests]
 
     def capabilities(self):
-        version=subprocess.run([find_cli(),'--version'],capture_output=True,text=True,
-                               creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0)).stdout.strip()
+        version=self.server_version()
         return Capabilities(version,frozenset({'project/list','project/update','thread/delete','thread/metadata/update','thread/resume'}),
-                            False,('실제 계정의 복원 후 대화 이어쓰기와 모바일 확인이 필요합니다.',))
+            False,('복원한 대화의 이어쓰기 확인은 각 백업에 기록됩니다. 모바일 확인은 별도입니다.',))
 
     def create_project(self, name, roots, key):
         return self.call('project/create',{'idempotencyKey':key,'name':name,'roots':[{'path':str(p.resolve())} for p in roots]})['project']['id']
@@ -73,27 +87,13 @@ class CodexAdapter:
         return imported
 
     def relocate_conversation(self, thread_id, cwd, runtime_roots):
-        # Existing DB cwd is immutable on resume/settings in this installed build.
-        # Re-register from a verified external recovery copy, using public APIs.
+        # App-bundled 0.160 persists world state; legacy 0.149 does not.
         self.ensure_write_allowed()
         old=self.read_thread(thread_id)
         if old.get('status',{}).get('type')=='active': raise RuntimeError('실행 중인 대화는 옮길 수 없습니다.')
-        raw=clean_path(old['path'])
-        children=[t for t in self.snapshot().conversations if t.parent_id==thread_id]
-        if children: raise RuntimeError('자식 대화가 있는 프로젝트는 일괄 복원 검증이 필요합니다. 원본을 유지했습니다.')
-        from ..files import digest
-        recovery=self.home/'project-manager-recovery'/uuid.uuid4().hex
-        recovery.mkdir(parents=True)
-        backup=recovery/'original.jsonl';shutil.copyfile(raw,backup)
-        if digest(raw)!=digest(backup): raise RuntimeError('대화 복구 사본이 일치하지 않습니다.')
-        write_json(recovery/'metadata.json',{'thread':old,'original_path':str(raw),'new_cwd':str(cwd)})
-        self.delete_thread(thread_id)
-        try:
-            self.import_conversation(backup,thread_id,cwd,runtime_roots,old.get('projectId'))
-        except Exception:
-            self.import_conversation(backup,thread_id,clean_path(old['cwd']),(clean_path(old['cwd']),),old.get('projectId'))
-            raise
-        if old.get('name'): self.call('thread/name/set',{'threadId':thread_id,'name':old['name']})
+        self.calls([
+            ('thread/resume',{'threadId':thread_id,'cwd':str(cwd.resolve()),'runtimeWorkspaceRoots':[str(p.resolve()) for p in runtime_roots]}),
+            ('thread/settings/update',{'threadId':thread_id,'cwd':str(cwd.resolve())})])
         current=self.read_thread(thread_id)
         if clean_path(current['cwd']).resolve()!=cwd.resolve(): raise RuntimeError('작업 경로 변경이 저장되지 않았습니다.')
         if old.get('projectId'): self.assign_conversation(thread_id,old['projectId'])
@@ -125,11 +125,24 @@ class CodexAdapter:
             aliases=[k for k,v in mapping.items() if v==p.id]
             alias=aliases[0] if aliases else p.id;project_ui[p.id]=alias;mapping[alias]=p.id
             old=legacy.get(alias,{})
-            legacy[alias]={**old,'id':alias,'name':p.name,'rootPaths':[str(r.resolve()) for r in p.roots]}
+            import time
+            now=int(time.time()*1000)
+            legacy[alias]={**old,'id':alias,'name':p.name,'rootPaths':[str(r.resolve()) for r in p.roots],
+                           'createdAt':old.get('createdAt',now),'updatedAt':now}
         for tid,pid in assignments.items():
             state.setdefault('thread-project-assignments',{})[tid]={'projectKind':'local','projectId':project_ui.get(pid,pid)} if pid else None
             if not pid: state['thread-project-assignments'].pop(tid,None)
             state.get('thread-workspace-root-hints',{}).pop(tid,None)
+            if pid is None:
+                for key in ('thread-project-membership-host-ids','thread-projectless-output-directories','queued-follow-ups'):
+                    if isinstance(state.get(key),dict): state[key].pop(tid,None)
+                if isinstance(state.get('projectless-thread-ids'),list):
+                    state['projectless-thread-ids']=[x for x in state['projectless-thread-ids'] if x!=tid]
+                unread=state.get('electron-thread-read-state-v1',{}).get('unreadByIdentity',{})
+                for identity in list(unread):
+                    if tid in identity: unread.pop(identity,None)
+        for ids in state.get('sidebar-project-thread-orders',{}).values():
+            if isinstance(ids,list): ids[:]=[x for x in ids if x not in assignments]
         for key in ('project-order','pinned-project-ids'):
             if isinstance(state.get(key),list): state[key]=[p for p in state[key] if p not in removed_aliases]
         for key in ('sidebar-project-thread-orders','project-appearances'):

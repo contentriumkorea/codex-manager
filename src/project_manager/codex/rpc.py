@@ -79,6 +79,10 @@ class CodexClient:
 
 def find_cli():
     import shutil
+    bundled=Path(os.environ.get('LOCALAPPDATA',''))/'OpenAI/Codex/bin'
+    candidates=list(bundled.glob('*/codex.exe'))
+    if candidates:
+        return str(max(candidates,key=lambda p:p.stat().st_mtime))
     installed = Path(os.environ.get('LOCALAPPDATA', '')) / 'Programs/OpenAI/Codex/bin/codex.exe'
     if installed.exists():
         return str(installed)

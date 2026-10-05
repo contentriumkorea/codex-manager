@@ -92,5 +92,5 @@ class OperationResult:
     file_status: str
     codex_status: str
     cleanup_status: str
-    mobile_status: str = '未確認'
+    mobile_status: str = '모바일 미확인'
     errors: tuple[str,...] = ()

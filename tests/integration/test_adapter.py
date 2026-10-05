@@ -10,6 +10,8 @@ def test_relocate_persists_new_path(tmp_path):
     raw=tmp_path/'raw.jsonl';tid=str(uuid.uuid4());write_rollout(raw,tid,a)
     pid=adapter.create_project('A',(a,),'create-a')
     adapter.import_conversation(raw,tid,a,(a,),pid)
+    def forbidden_delete(*_): raise AssertionError('경로 변경으로 대화를 삭제하면 안 됩니다.')
+    adapter.delete_thread=forbidden_delete
     adapter.relocate_conversation(tid,b,(b,))
     adapter.assign_conversation(tid,pid)
     assert Path(adapter.read_thread(tid)['cwd'])==b
