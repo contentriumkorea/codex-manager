@@ -4,5 +4,6 @@ __pycache__/
 .test-artifacts/
 build/
 dist/
+releases/
 *.egg-info/
 .superpowers/

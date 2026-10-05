@@ -17,6 +17,8 @@ from ..journal import Journal
 from ..operations import transfer_project,import_bundle,recover_operation,change_connections
 from ..restore_proof import verify_restored_bundle
 from .dialogs import confirm,confirm_transfer,ConnectionsDialog
+from .updates import UpdateChecker,UpdateDialog
+from ..version import APP_NAME,VERSION
 
 
 def bytes_text(size):
@@ -36,26 +38,32 @@ class Worker(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self,adapter,state_dir,auto_refresh=True):
+    def __init__(self,adapter,state_dir,auto_refresh=True,start_update_check=True):
         super().__init__();self.adapter=adapter;self.state_dir=Path(state_dir)
         self.journal=Journal(self.state_dir/'journal.sqlite');self.snapshot=Snapshot((),(),'')
         self.mode='projects';self.workers=[];self.sizes={};self.backups=[];self.active_bundle=None
+        self.startup_update_check=True;self.latest_release=None;self.update_dialog=None;self.update_popup_pending=False
         settings_path=self.state_dir/'settings.json'
         if settings_path.exists():
-            try: self.backups=[Path(p) for p in json.loads(settings_path.read_text(encoding='utf-8')).get('backups',[]) if Path(p).exists()]
+            try:
+                saved=json.loads(settings_path.read_text(encoding='utf-8'))
+                self.backups=[Path(p) for p in saved.get('backups',[]) if Path(p).exists()]
+                self.startup_update_check=saved.get('startup_update_check',True)
             except (ValueError,OSError): pass
-        self.setWindowTitle('Project Conversation Manager');self.resize(1260,810);self.setMinimumSize(950,630)
+        self.setWindowTitle(APP_NAME);self.resize(1260,810);self.setMinimumSize(950,630)
         self.setStyleSheet((Path(__file__).parent/'theme.qss').read_text(encoding='utf-8'))
         base=QWidget();self.setCentralWidget(base);outer=QHBoxLayout(base);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
         sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(205)
         nav=QVBoxLayout(sidebar);nav.setContentsMargins(16,20,16,20)
-        brand=QLabel('Project Manager');brand.setObjectName('brand');nav.addWidget(brand)
+        brand=QLabel(APP_NAME);brand.setObjectName('brand');nav.addWidget(brand)
         sub=QLabel('대화와 폴더를 함께');sub.setObjectName('muted');nav.addWidget(sub);nav.addSpacing(24)
         self.nav_buttons=[]
         for label,mode in [('프로젝트','projects'),('연결 안 된 대화','unassigned'),('백업 보관함','backups'),('진행·복구','recovery')]:
             b=QPushButton(label);b.setObjectName('nav');b.setCheckable(True);b.clicked.connect(lambda _,m=mode:self.set_mode(m));nav.addWidget(b);self.nav_buttons.append((b,mode))
         nav.addStretch();self.connection=QLabel('로컬 Codex');self.connection.setObjectName('muted');self.connection.setWordWrap(True);nav.addWidget(self.connection)
-        settings=QPushButton('저장소 위치');settings.clicked.connect(self.choose_home);nav.addWidget(settings);outer.addWidget(sidebar)
+        settings=QPushButton('저장소 위치');settings.clicked.connect(self.choose_home);nav.addWidget(settings)
+        self.update_button=QPushButton('업데이트');self.update_button.clicked.connect(lambda:self.open_updates());nav.addWidget(self.update_button)
+        version=QLabel('v'+VERSION+' · CONTENTRIUM');version.setObjectName('muted');nav.addWidget(version);outer.addWidget(sidebar)
         content=QVBoxLayout();content.setContentsMargins(28,25,25,16);content.setSpacing(18);outer.addLayout(content,1)
         top=QHBoxLayout();self.heading=QLabel('프로젝트');self.heading.setObjectName('heading');top.addWidget(self.heading);top.addStretch()
         self.search=QLineEdit();self.search.setPlaceholderText('프로젝트·대화 검색');self.search.setMaximumWidth(270);self.search.textChanged.connect(self.filter_list);top.addWidget(self.search)
@@ -83,7 +91,34 @@ class MainWindow(QMainWindow):
         split.addWidget(detail);split.setSizes([470,510])
         self.footer=QLabel('원본 파일과 대화를 함께 관리합니다.');self.footer.setObjectName('muted');content.addWidget(self.footer)
         self.set_mode('projects')
+        self.update_checker=UpdateChecker(self);self.update_checker.checked.connect(self.update_checked);self.update_checker.failed.connect(self.update_failed)
         if auto_refresh: QTimer.singleShot(0,self.reload)
+        if auto_refresh and start_update_check and self.startup_update_check: QTimer.singleShot(1000,lambda:self.check_updates(True))
+
+    def open_updates(self,check=True):
+        if not self.update_dialog: self.update_dialog=UpdateDialog(self)
+        self.update_dialog.show();self.update_dialog.raise_()
+        if self.latest_release: self.update_dialog.show_release(self.latest_release)
+        if check: self.check_updates(False)
+        return self.update_dialog
+
+    def check_updates(self,startup=False):
+        self.update_popup_pending=self.update_popup_pending or startup
+        if self.update_dialog: self.update_dialog.status.setText('업데이트 확인 중…')
+        self.update_checker.check()
+
+    def update_checked(self,release):
+        self.latest_release=release
+        if self.update_dialog: self.update_dialog.show_release(release)
+        if self.update_popup_pending and release and release.available:
+            if self.workers: QTimer.singleShot(1000,lambda:self.update_checked(release));return
+            self.open_updates(check=False)
+        self.update_popup_pending=False
+
+    def update_failed(self,error):
+        self.update_popup_pending=False
+        if self.update_dialog: self.update_dialog.status.setText('확인하지 못했습니다. 다시 시도할 수 있습니다.\n'+error)
+        self.footer.setText('업데이트 확인 실패 · 업데이트 메뉴에서 다시 확인할 수 있습니다.')
 
     def selected_project(self):
         item=self.project_list.currentItem()
@@ -334,7 +369,10 @@ class MainWindow(QMainWindow):
 
     def save_settings(self):
         from ..bundles import write_json
-        write_json(self.state_dir/'settings.json',{'home':str(self.adapter.home),'backups':[str(p) for p in self.backups]})
+        path=self.state_dir/'settings.json'
+        try: old=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        except (ValueError,OSError): old={}
+        write_json(path,{**old,'home':str(self.adapter.home),'backups':[str(p) for p in self.backups],'startup_update_check':self.startup_update_check})
 
     def assign_unassigned(self):
         item=self.project_list.currentItem()

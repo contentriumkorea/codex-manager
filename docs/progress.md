@@ -36,3 +36,12 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Final packaged onedir executable launched successfully and rendered the actual A/B catalog; final screenshot checked. Excluded incompatible Poppler ICU was the startup fix; runtime source program behavior is unchanged.
 - Actual original test B's 12 file hashes and original conversation hash still match its pre-import backup; A/B project roots and IDs remain at their original paths.
 - Transfer recovery copies are outside the destination project so normal backups do not capture rollback history accidentally.
+
+2026-10-06 Codex Manager v0.2.0 publishing:
+- User authorized Contentrium GitHub publication and startup/in-app updates.
+- Renamed display and packaged executable; retained existing application state path.
+- Public GitHub stable releases, async startup/manual checks, notes, preference, verified staging, external installer and restart implemented.
+- Independent review found and fixed Windows helper cwd lock, inherited PowerShell module incompatibility, and missing interruption recovery.
+- Actual rollback test asserts the failed replacement was swapped before restoration. Persisted first-rename interruption recovery tested separately.
+- Full suite: 66 passed, 38.71 s. Native packaged install completed with version/path/PID health handshake; only verified prior program files removed, unknown user file and settings retained.
+- No live user project/chat was moved or removed for updater verification. Actual other-PC/mobile continuation remains pending.
