@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 
@@ -11,13 +12,14 @@ def prepare_rollout(source: Path, home: Path, cwd: Path, runtime_roots: tuple[Pa
     if first.get('type') != 'session_meta':
         raise ValueError('대화 첫 기록이 session_meta가 아닙니다.')
     tid = str(uuid.UUID(first['payload']['id']))
-    timestamp = first['payload'].get('timestamp', '2026-10-06T00:00:00Z')[:19]
+    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
     day=timestamp[:10]
     target_dir = home / 'sessions' / day[:4] / day[5:7] / day[8:10]
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"rollout-{timestamp.replace(':','-')}-{tid}.jsonl"
-    if target.exists():
-        raise FileExistsError('같은 대화의 가져오기 파일이 이미 있습니다.')
+    while target.exists():
+        timestamp=(datetime.fromisoformat(timestamp)+timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%S')
+        target=target_dir/f"rollout-{timestamp.replace(':','-')}-{tid}.jsonl"
     temporary = target.with_suffix('.partial')
     first['payload']['cwd'] = str(cwd.resolve())
     first['payload']['runtime_workspace_roots'] = [str(p.resolve()) for p in runtime_roots]
