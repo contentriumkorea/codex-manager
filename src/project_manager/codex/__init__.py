@@ -1,0 +1,1 @@
+"""Codex protocol adapter."""
