@@ -14,7 +14,7 @@ from ..codex.portability import transcript
 from ..bundles import export_project,verify_bundle,load_manifest,read_transcript
 from ..files import scan_roots
 from ..journal import Journal
-from ..operations import transfer_project,import_bundle,recover_operation
+from ..operations import transfer_project,import_bundle,recover_operation,change_connections
 from ..restore_proof import verify_restored_bundle
 from .dialogs import confirm,confirm_transfer,ConnectionsDialog
 
@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
         self.snapshot=snapshot;self.filter_list()
 
     def reload(self):
-        self.run_job('프로젝트 확인',lambda w:self.adapter.snapshot(),self.refresh)
+        self.run_job('프로젝트 확인',lambda w:self.adapter.snapshot(include_runtime=False),self.refresh)
 
     def filter_list(self):
         query=self.search.text().lower();selected=self.project_list.currentItem()
@@ -221,10 +221,9 @@ class MainWindow(QMainWindow):
         destination=Path(parent)/(safe+'_'+stamp)
         ts=[t for t in self.snapshot.conversations if t.project_id==p.id]
         if not confirm(self,'프로젝트 백업',f'{p.name}\n\n대화 {len(ts)}개와 폴더 {len(p.roots)}개를 함께 복사합니다.\n\n백업 위치\n{destination}\n\n원본은 유지합니다.'): return
-        snap=self.snapshot
         def done(result):
             self.backups.append(destination);self.save_settings();self.footer.setText('백업 저장: '+str(destination));self.show_result(result)
-        self.run_job('대화와 파일 백업',lambda w:export_project(p,snap,destination,w.progress.emit,w.cancelled.is_set),done)
+        self.run_job('대화와 파일 백업',lambda w:export_project(p,self.adapter.snapshot(),destination,w.progress.emit,w.cancelled.is_set),done)
 
     def guard_change(self):
         try: self.adapter.ensure_write_allowed();return True
@@ -258,7 +257,7 @@ class MainWindow(QMainWindow):
         text+='\n\n대화의 소속과 현재 작업 경로를 함께 변경합니다.\n파일 복사와 연결을 다시 검증한 뒤 선택한 원본을 정리합니다.'
         clean=confirm_transfer(self,'합치기' if target else '옮기기',text)
         if clean is None: return
-        recovery=next(iter(destinations.values())).parent/'.project-manager-recovery'
+        recovery=(target.roots[0].parent if target else next(iter(destinations.values())).parent)/'.project-manager-recovery'
         self.run_job('파일과 대화 연결 변경',lambda w:transfer_project(self.adapter,p,destinations,self.journal,recovery,target,clean,w.progress.emit,w.cancelled.is_set),self.show_result)
 
     def connections(self):
@@ -269,13 +268,7 @@ class MainWindow(QMainWindow):
         if d.exec()!=QDialog.Accepted: return
         try: project,tids,target=d.values()
         except Exception as exc: QMessageBox.warning(self,'연결 관리',str(exc));return
-        def change(w):
-            self.adapter.update_project(project)
-            if target!='unchanged':
-                for tid in tids: self.adapter.assign_conversation(tid,target)
-            self.adapter.sync_desktop_state([project],{tid:target for tid in tids} if target!='unchanged' else {})
-            return self.adapter.snapshot()
-        self.run_job('프로젝트 연결 갱신',change,self.refresh)
+        self.run_job('프로젝트 연결 갱신',lambda w:change_connections(self.adapter,project,{tid:target for tid in tids} if target!='unchanged' else {},self.journal),self.show_result)
 
     def export_cleanup(self):
         p=self.selected_project()
@@ -321,9 +314,15 @@ class MainWindow(QMainWindow):
         error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'작업이 중단됐습니다.')
         text='작업 상태: '+data['state']+'\n\n'+error+'\n\n'
         if recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
+        elif data['payload']['kind']=='connections': text+='이전 프로젝트 이름·폴더 연결·대화 소속을 복구합니다.'
         else: text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n중단된 가져오기를 이어서 검증합니다.'
         if not confirm(self,'작업 복구',text) or not self.guard_change(): return
-        self.run_job('프로젝트 복구',lambda w:recover_operation(operation_id,self.adapter,self.journal,w.progress.emit),self.show_result)
+        bundle_override=None
+        if data['payload']['kind']=='import':
+            selected=QFileDialog.getExistingDirectory(self,'중단된 작업의 백업 폴더 선택',data['payload'].get('bundle',''))
+            if not selected: return
+            bundle_override=Path(selected)
+        self.run_job('프로젝트 복구',lambda w:recover_operation(operation_id,self.adapter,self.journal,w.progress.emit,bundle_override),self.show_result)
 
     def verify_restore(self):
         bundle=self.active_bundle
@@ -346,10 +345,7 @@ class MainWindow(QMainWindow):
         label,ok=QInputDialog.getItem(self,'대화 연결','대상 프로젝트',labels,0,False)
         if not ok: return
         p=projects[labels.index(label)];tid=item.data(Qt.UserRole)
-        def assign(w):
-            self.adapter.assign_conversation(tid,p.id);self.adapter.sync_desktop_state([p],{tid:p.id})
-            return self.adapter.snapshot()
-        self.run_job('대화 연결',assign,self.refresh)
+        self.run_job('대화 연결',lambda w:change_connections(self.adapter,p,{tid:p.id},self.journal),self.show_result)
 
     def choose_home(self):
         path=QFileDialog.getExistingDirectory(self,'Codex 저장소 선택',str(self.adapter.home))

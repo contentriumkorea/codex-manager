@@ -16,4 +16,23 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Ruling: Interfaces use concrete export_project/transfer_project/import_bundle functions rather than an unused generic plan executor. Per-operation journal still captures the previewed changes. Cost: a future operation needs its own validated handler.
 - Ruling: File merge defaults to a distinct subfolder; no flat merge/rename conflict wizard in this build. Existing different-content files are never overwritten. Cost: users flattening trees must resolve layouts separately.
 - Partial recovery and post-import proof implemented. Actual-account continuation and mobile/second-PC checks are external acceptance work, not completed claims.
-- Packaging and independent final review pending.
+- Final independent review completed: one Critical and six Important findings admitted into one fix pass.
+- Final: fixed source deletion scope drift — cleanup roots/membership/parent/cwd/runtime and descendant regressions RED→GREEN.
+- Final: fixed stale runtime roots — latest persisted thread_settings_applied catalog regression RED→GREEN; move twice then export/import tested against bundled server.
+- Final: fixed recovery bundle identity — different bundle regression RED→GREEN; relocated bundle locator provided.
+- Final: fixed registration response loss — unassigned registered thread reconciliation regression RED→GREEN; intention journaled before RPC.
+- Final: fixed merge rollback — target roots and individual previous memberships regression RED→GREEN; explicit recovery also restores them.
+- Final: fixed restore proof scope — root/cwd/runtime/parent drift regressions RED→GREEN; full appended user/assistant completed turn required.
+- Final: fixed unhashed payload inclusion — extra file regression RED→GREEN; strict manifest/checksum consistency and copying of declared inventory only.
+- Additional deletion guard and connection journaling regressions RED→GREEN. Full suite 47/47 passed, 33.79 s, zero skipped.
+- Isolated fixture acceptance: A merged into B, verified backup, new-home import, simulated continuation proof, source chats/project/files removed; pass. This is not actual account continuation.
+- Final: Ruling: actual account continuation / second physical PC / mobile were declined by reviewer — ship as test build and keep these acceptance gates pending; cost if wrong: cross-device issues are not caught by local fixture tests.
+- Final: Ruling: physical disk disconnect / cloud placeholders / hostile junction swapping were declined by reviewer — guarded paths and deterministic fixtures tested, no hardware guarantee; cost if wrong: interrupted operations require recovery, racing filesystem changes can still disrupt a transfer.
+- Final: Ruling: no remote repository or integration destination was requested — preserve implementation branch and source folder; cost if wrong: integration remains a separate step.
+- Large-history display: split lightweight display catalog from full operation validation; 2446 chats displayed in 0.23 s. Reverse line reader avoids quadratic copying of large image records.
+- Packaging startup regression found an incompatible ICU DLL collected from Poppler on PATH. Confirmed working Qt loads Windows System32 ICU; distribution excludes external ICU.
+- Latest full suite: 49/49 passed, 36.82 s, zero skipped.
+- Full release acceptance remains blocked on actual account / second-PC / mobile verification; local fixture pass is explicitly separate.
+- Final packaged onedir executable launched successfully and rendered the actual A/B catalog; final screenshot checked. Excluded incompatible Poppler ICU was the startup fix; runtime source program behavior is unchanged.
+- Actual original test B's 12 file hashes and original conversation hash still match its pre-import backup; A/B project roots and IDs remain at their original paths.
+- Transfer recovery copies are outside the destination project so normal backups do not capture rollback history accidentally.

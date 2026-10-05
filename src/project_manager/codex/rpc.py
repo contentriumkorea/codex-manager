@@ -100,4 +100,4 @@ def isolated_client(home: Path):
     env['CODEX_HOME'] = str(home.resolve())
     env['CODEX_SQLITE_HOME'] = str((home / 'sqlite').resolve())
     env['RUST_LOG'] = 'error'
-    return CodexClient([find_cli(), 'app-server', '--listen', 'stdio://'], env)
+    return CodexClient([find_cli(),'-c','sqlite_home='+json.dumps(str((home/'sqlite').resolve())), 'app-server', '--listen', 'stdio://'], env)

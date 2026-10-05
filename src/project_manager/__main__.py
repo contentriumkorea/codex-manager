@@ -23,7 +23,7 @@ def main():
     window=MainWindow(CodexAdapter(args.home),args.state_dir,auto_refresh=not args.screenshot)
     window.show()
     if args.screenshot:
-        window.refresh(window.adapter.snapshot());window.project_list.setCurrentRow(0)
+        window.refresh(window.adapter.snapshot(include_runtime=False));window.project_list.setCurrentRow(0)
         from PySide6.QtCore import QTimer
         def capture():
             args.screenshot.parent.mkdir(parents=True,exist_ok=True);window.grab().save(str(args.screenshot));app.quit()

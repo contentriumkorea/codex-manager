@@ -34,7 +34,7 @@ class CodexAdapter:
         if isolated and self.home==Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex'))).resolve():
             raise ValueError('격리 테스트 경로가 실제 Codex 저장소와 같습니다.')
 
-    def snapshot(self): return read_catalog(self.home)
+    def snapshot(self, include_runtime=True): return read_catalog(self.home,include_runtime)
 
     def ensure_write_allowed(self):
         if not self.isolated and desktop_running():
@@ -60,7 +60,9 @@ class CodexAdapter:
         if self.isolated: env['CODEX_SQLITE_HOME']=str(self.home)
         else: env.pop('CODEX_SQLITE_HOME',None)
         env['RUST_LOG']='error'
-        with CodexClient([find_cli(),'app-server','--listen','stdio://'],env) as client:
+        command=[find_cli()]
+        if self.isolated: command+=['-c','sqlite_home='+json.dumps(str(self.home))]
+        with CodexClient(command+['app-server','--listen','stdio://'],env) as client:
             return [client.call(method,params) for method,params in requests]
 
     def capabilities(self):
@@ -81,7 +83,9 @@ class CodexAdapter:
     def import_conversation(self, raw, tid, cwd, runtime_roots, project_id):
         self.ensure_write_allowed()
         imported=prepare_rollout(raw,self.home,cwd,runtime_roots)
-        result=self.call('thread/resume',{'threadId':tid,'path':str(imported),'cwd':str(cwd.resolve()),'runtimeWorkspaceRoots':[str(p.resolve()) for p in runtime_roots]})['thread']
+        result=self.calls([
+            ('thread/resume',{'threadId':tid,'path':str(imported),'cwd':str(cwd.resolve()),'runtimeWorkspaceRoots':[str(p.resolve()) for p in runtime_roots]}),
+            ('thread/metadata/update',{'threadId':tid,'projectId':project_id or ''})])[0]['thread']
         if result['id']!=tid: raise RuntimeError('등록된 대화 ID가 일치하지 않습니다.')
         self.assign_conversation(tid,project_id)
         return imported
@@ -90,13 +94,18 @@ class CodexAdapter:
         # App-bundled 0.160 persists world state; legacy 0.149 does not.
         self.ensure_write_allowed()
         old=self.read_thread(thread_id)
+        membership=next(t.project_id for t in self.snapshot().conversations if t.id==thread_id)
         if old.get('status',{}).get('type')=='active': raise RuntimeError('실행 중인 대화는 옮길 수 없습니다.')
         self.calls([
             ('thread/resume',{'threadId':thread_id,'cwd':str(cwd.resolve()),'runtimeWorkspaceRoots':[str(p.resolve()) for p in runtime_roots]}),
-            ('thread/settings/update',{'threadId':thread_id,'cwd':str(cwd.resolve())})])
+            ('thread/settings/update',{'threadId':thread_id,'cwd':str(cwd.resolve())}),
+            ('thread/metadata/update',{'threadId':thread_id,'projectId':membership or ''})])
         current=self.read_thread(thread_id)
         if clean_path(current['cwd']).resolve()!=cwd.resolve(): raise RuntimeError('작업 경로 변경이 저장되지 않았습니다.')
-        if old.get('projectId'): self.assign_conversation(thread_id,old['projectId'])
+        persisted=next(t for t in self.snapshot().conversations if t.id==thread_id)
+        if tuple(p.resolve() for p in persisted.runtime_roots)!=tuple(p.resolve() for p in runtime_roots):
+            raise RuntimeError('작업 폴더 목록 변경이 저장되지 않았습니다.')
+        self.assign_conversation(thread_id,membership)
 
     def update_project(self, project):
         self.call('project/update',{'projectId':project.id,'name':project.name,'roots':[{'path':str(p.resolve())} for p in project.roots]})
@@ -108,7 +117,7 @@ class CodexAdapter:
 
     def delete_thread(self, tid): self.call('thread/delete',{'threadId':tid})
 
-    def sync_desktop_state(self, projects, assignments, removed=()):
+    def sync_desktop_state(self, projects, assignments, removed=(),deleted=()):
         """Update legacy UI records only while the app is closed; keep all unrelated data."""
         self.ensure_write_allowed()
         if self.isolated: return
@@ -133,7 +142,7 @@ class CodexAdapter:
             state.setdefault('thread-project-assignments',{})[tid]={'projectKind':'local','projectId':project_ui.get(pid,pid)} if pid else None
             if not pid: state['thread-project-assignments'].pop(tid,None)
             state.get('thread-workspace-root-hints',{}).pop(tid,None)
-            if pid is None:
+            if tid in deleted:
                 for key in ('thread-project-membership-host-ids','thread-projectless-output-directories','queued-follow-ups'):
                     if isinstance(state.get(key),dict): state[key].pop(tid,None)
                 if isinstance(state.get('projectless-thread-ids'),list):

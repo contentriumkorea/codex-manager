@@ -19,10 +19,39 @@ def map_path(path, mapping):
     raise ValueError(f'프로젝트 폴더 밖의 작업 경로입니다: {path}')
 
 
+def change_connections(adapter,project,assignments,journal):
+    adapter.ensure_write_allowed();snapshot=adapter.snapshot()
+    original=next(p for p in snapshot.projects if p.id==project.id)
+    threads={t.id:t for t in snapshot.conversations}
+    if any(tid not in threads for tid in assignments): raise ValueError('선택한 대화가 바뀌었습니다.')
+    known_projects={p.id for p in snapshot.projects}
+    if any(pid is not None and pid not in known_projects for pid in assignments.values()): raise ValueError('대상 프로젝트가 없습니다.')
+    old={tid:threads[tid].project_id for tid in assignments};operation_id=uuid.uuid4().hex
+    journal.begin(operation_id,{'kind':'connections','home':str(adapter.home),'resources':list({project.id,*[p for p in assignments.values() if p],*[p for p in old.values() if p]}),
+                                'project':asdict(original),'assignments':old})
+    try:
+        journal.record(operation_id,'relinking',{})
+        adapter.update_project(project)
+        for tid,pid in assignments.items(): adapter.assign_conversation(tid,pid)
+        adapter.sync_desktop_state([project],assignments)
+        journal.record(operation_id,'completed',{})
+        return OperationResult('completed','파일 유지','연결 변경 완료','원본 파일 유지')
+    except Exception as exc:
+        errors=[]
+        try:
+            adapter.update_project(original)
+            for tid,pid in old.items(): adapter.assign_conversation(tid,pid)
+            adapter.sync_desktop_state([original],old)
+        except Exception as rollback: errors.append(str(rollback))
+        journal.record(operation_id,'needs_recovery',{'error':str(exc),'rollback_errors':errors})
+        return OperationResult('needs_recovery','파일 유지','이전 연결 복구 확인 필요','원본 파일 유지',errors=(str(exc),*errors))
+
+
 def transfer_project(adapter, project, destinations, journal, recovery_root, target=None, clean=False, progress=lambda *_:None, cancelled=lambda:False):
     adapter.ensure_write_allowed()
     snapshot=adapter.snapshot()
     source=next(p for p in snapshot.projects if p.id==project.id)
+    if target: target=next(p for p in snapshot.projects if p.id==target.id)
     conversations=[t for t in snapshot.conversations if t.project_id==source.id]
     selected={t.id for t in conversations}
     while True:
@@ -48,7 +77,7 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
     if inventory.blockers: raise ValueError('\n'.join(inventory.blockers))
     operation_id=uuid.uuid4().hex
     recovery=Path(recovery_root)/operation_id;recovery.mkdir(parents=True)
-    journal.begin(operation_id,{'kind':'merge' if target else 'move','resources':[source.id]+([target.id] if target else []),
+    journal.begin(operation_id,{'kind':'merge' if target else 'move','home':str(adapter.home),'resources':[source.id]+([target.id] if target else []),
                                 'source':asdict(source),'destinations':destinations,'recovery':str(recovery)})
     moved=[];project_changed=False;linked_done=False
     try:
@@ -91,10 +120,13 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
         rollback_errors=[]
         for t in reversed(moved) if not linked_done else []:
             try:
-                adapter.relocate_conversation(t.id,t.cwd,t.runtime_roots or (t.cwd,));adapter.assign_conversation(t.id,source.id)
+                adapter.relocate_conversation(t.id,t.cwd,t.runtime_roots or (t.cwd,));adapter.assign_conversation(t.id,t.project_id)
             except Exception as error: rollback_errors.append(str(error))
         if project_changed and not linked_done:
-            try: adapter.update_project(source)
+            try: adapter.update_project(target or source)
+            except Exception as error: rollback_errors.append(str(error))
+        if not linked_done and not rollback_errors:
+            try: adapter.sync_desktop_state([source]+([target] if target else []),{t.id:t.project_id for t in conversations})
             except Exception as error: rollback_errors.append(str(error))
         journal.record(operation_id,'needs_recovery',{'error':str(exc),'rollback_errors':rollback_errors})
         return OperationResult('needs_recovery','복사본 유지','복구 확인 필요','원본 파일 유지','모바일 미확인',(str(exc),*rollback_errors))
@@ -105,18 +137,33 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
     if m['dependencies']: raise ValueError('외부 첨부·자식 대화·worktree 의존성을 해결한 뒤 가져올 수 있습니다.')
     snapshot=adapter.snapshot();existing={t.id:t for t in snapshot.conversations}
     previous_pid=None
+    intended=set()
     if resume_id:
+        pending=next((p for p in journal.pending() if p['id']==resume_id),None)
+        if not pending or pending['payload'].get('kind')!='import': raise ValueError('가져오기 복구 작업이 아닙니다.')
+        plan=pending['payload']
+        if Path(plan['home']).resolve()!=adapter.home.resolve(): raise ValueError('작업을 시작한 Codex 저장소를 선택하세요.')
+        if plan.get('bundle_id')!=m['bundle_id'] or plan.get('manifest_digest')!=digest(bundle/'manifest.json'):
+            raise ValueError('중단된 작업과 다른 백업입니다. 원래 백업 폴더를 선택하세요.')
+        if {k:Path(v).resolve() for k,v in plan['destinations'].items()}!={k:Path(v).resolve() for k,v in destinations.items()}:
+            raise ValueError('중단된 작업의 대상 폴더가 다릅니다.')
         previous_pid=next((e['payload'].get('project_id') for e in reversed(journal.events(resume_id)) if e['payload'].get('project_id')),None)
-    conflicts=[t['id'] for t in m['conversations'] if t['id'] in existing and (not resume_id or existing[t['id']].project_id!=previous_pid)]
+        intended={e['payload']['thread_id'] for e in journal.events(resume_id) if e['phase']=='registering' and 'thread_id' in e['payload']}
+    conflicts=[t['id'] for t in m['conversations'] if t['id'] in existing and (not resume_id or not previous_pid or t['id'] not in intended or existing[t['id']].project_id not in (None,previous_pid))]
     if conflicts: raise ValueError('대상 컴퓨터에 같은 ID의 대화가 있습니다. 기존 대화를 덮어쓰지 않습니다: '+', '.join(conflicts))
     src={r['id']:safe_child(bundle,r['bundle_path']) for r in m['roots']}
     dest={rid:Path(destinations[rid]).resolve() for rid in src}
     errors=validate_paths(tuple(src.values()),tuple(dest.values()),(adapter.home,))
     if errors: raise ValueError('\n'.join(errors))
-    # Re-scan backup because mtimes/file identities differ from the original source.
-    inv=scan_roots(src,True)
+    # Copy exactly the verified manifest, never files added after verification.
+    entries=[]
+    for e in m['inventory']:
+        path=safe_child(src[e['root_id']],e['relative_path']);stat=path.stat()
+        entries.append(FileEntry(e['root_id'],e['relative_path'],e['size'],e['sha256'],str(stat.st_ino),stat.st_mtime_ns))
+    inv=Inventory(tuple(entries),(),sum(e.size for e in entries),None,tuple(tuple(x) for x in m['directories']))
     operation_id=resume_id or uuid.uuid4().hex
-    if not resume_id: journal.begin(operation_id,{'kind':'import','resources':['bundle:'+m['bundle_id']], 'bundle':str(bundle),'destinations':dest})
+    if not resume_id: journal.begin(operation_id,{'kind':'import','home':str(adapter.home),'resources':['bundle:'+m['bundle_id']], 'bundle':str(bundle),
+                                                 'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'destinations':dest})
     try:
         journal.record(operation_id,'copying',{})
         require(copy_verified(inv,src,dest,progress,cancelled))
@@ -129,22 +176,28 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
             cwd=map_path(clean_path(t['cwd']),mapping)
             runtime=tuple(map_path(clean_path(p),mapping) for p in t.get('runtime_roots',[])) or (cwd,)
             if t['id'] not in existing:
+                journal.record(operation_id,'registering',{'thread_id':t['id'],'project_id':pid,'cwd':str(cwd),'runtime_roots':runtime})
                 adapter.import_conversation(safe_child(bundle,t['rollout']),t['id'],cwd,runtime,pid)
             else:
                 from .codex.portability import transcript
                 baseline=list(transcript(safe_child(bundle,t['rollout'])))
                 current=list(transcript(existing[t['id']].rollout))
-                if current[:len(baseline)]!=baseline or existing[t['id']].cwd.resolve()!=cwd.resolve():
+                if (current[:len(baseline)]!=baseline or existing[t['id']].cwd.resolve()!=cwd.resolve() or
+                    tuple(p.resolve() for p in existing[t['id']].runtime_roots)!=tuple(p.resolve() for p in runtime)):
                     raise ValueError('이미 등록된 대화가 복구 계획과 다릅니다.')
+            adapter.assign_conversation(t['id'],pid)
             if t.get('title'): adapter.call('thread/name/set',{'threadId':t['id'],'name':t['title']})
             if t.get('archived'): adapter.call('thread/archive',{'threadId':t['id']})
             read=adapter.read_thread(t['id'],True)
             if clean_path(read['cwd']).resolve()!=cwd.resolve() or read.get('projectId')!=pid: raise ValueError('가져온 대화의 연결 검증에 실패했습니다.')
+            active=next(x for x in adapter.snapshot().conversations if x.id==t['id'])
+            if active.parent_id!=t.get('parent_id') or tuple(p.resolve() for p in active.runtime_roots)!=tuple(p.resolve() for p in runtime):
+                raise ValueError('가져온 대화의 부모·작업 폴더를 확인할 수 없습니다.')
         p=Project(pid,m['project']['name'],tuple(dest.values()))
         adapter.sync_desktop_state([p],{t['id']:pid for t in m['conversations']})
         reports=adapter.home/'project-manager-import-reports';reports.mkdir(exist_ok=True)
         restored=adapter.snapshot()
-        write_json(reports/(m['bundle_id']+'.json'),{'bundle_id':m['bundle_id'],'project_id':pid,
+        write_json(reports/(m['bundle_id']+'.json'),{'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'project_id':pid,
                    'destinations':dest,'threads':{t['id']:{'offset':next(x for x in restored.conversations if x.id==t['id']).rollout.stat().st_size} for t in m['conversations']}})
         journal.record(operation_id,'completed',{})
         return OperationResult('completed','복원 검증 완료','대화 등록 완료','백업 유지','모바일 미확인')
@@ -153,12 +206,20 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
         return OperationResult('needs_recovery','부분 복원','등록 확인 필요','백업 유지','모바일 미확인',(str(exc),))
 
 
-def recover_operation(operation_id,adapter,journal,progress=lambda *_:None):
+def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundle_override=None):
     adapter.ensure_write_allowed()
     operation=next(p for p in journal.pending() if p['id']==operation_id)
     payload=operation['payload']
+    if Path(payload['home']).resolve()!=adapter.home.resolve(): raise ValueError('작업을 시작한 Codex 저장소를 선택하세요: '+payload['home'])
+    if payload['kind']=='connections':
+        p=payload['project'];original=Project(p['id'],p['name'],tuple(clean_path(x) for x in p['roots']),tuple(p.get('legacy_ids',[])))
+        adapter.update_project(original)
+        for tid,pid in payload['assignments'].items(): adapter.assign_conversation(tid,pid)
+        adapter.sync_desktop_state([original],payload['assignments'])
+        journal.record(operation_id,'completed',{'recovered':True})
+        return OperationResult('completed','파일 유지','이전 연결 복구 완료','원본 파일 유지')
     if payload['kind']=='import':
-        return import_bundle(Path(payload['bundle']),{k:Path(v) for k,v in payload['destinations'].items()},adapter,journal,progress,resume_id=operation_id)
+        return import_bundle(Path(bundle_override or payload['bundle']),{k:Path(v) for k,v in payload['destinations'].items()},adapter,journal,progress,resume_id=operation_id)
     if payload['kind'] not in ('move','merge'): raise ValueError('이 작업은 검증된 백업에서 가져오기로 복구하세요.')
     recovery=Path(payload['recovery'])
     metadata=json.loads((recovery/'metadata.json').read_text(encoding='utf-8'))
@@ -182,12 +243,19 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None):
         pid=adapter.create_project(old['name'],roots,'recover-'+operation_id)
     original=Project(pid,old['name'],roots,tuple(old.get('legacy_ids',[])))
     adapter.update_project(original)
+    previous_target=metadata.get('target')
+    restored_projects=[original]
+    if previous_target:
+        target_id=previous_target['id']
+        if not any(p.id==target_id for p in adapter.snapshot().projects): raise ValueError('합칠 대상 프로젝트가 없어 자동 복구할 수 없습니다.')
+        previous=Project(target_id,previous_target['name'],tuple(clean_path(p) for p in previous_target['roots']),tuple(previous_target.get('legacy_ids',[])))
+        adapter.update_project(previous);restored_projects.append(previous)
     known={t.id:t for t in adapter.snapshot().conversations}
     for t in metadata['conversations']:
         cwd=clean_path(t['cwd']);runtime=tuple(clean_path(p) for p in t['runtime_roots']) or (cwd,)
         if t['id'] in known: adapter.relocate_conversation(t['id'],cwd,runtime)
-        else: adapter.import_conversation(recovery/(t['id']+'.jsonl'),t['id'],cwd,runtime,pid)
-        adapter.assign_conversation(t['id'],pid)
-    adapter.sync_desktop_state([original],{t['id']:pid for t in metadata['conversations']})
+        else: adapter.import_conversation(recovery/(t['id']+'.jsonl'),t['id'],cwd,runtime,pid if t['project_id']==old['id'] else t['project_id'])
+        adapter.assign_conversation(t['id'],pid if t['project_id']==old['id'] else t['project_id'])
+    adapter.sync_desktop_state(restored_projects,{t['id']:pid if t['project_id']==old['id'] else t['project_id'] for t in metadata['conversations']})
     journal.record(operation_id,'completed',{'recovered':True})
     return OperationResult('completed','원본 위치 복구 완료','이전 연결 복구 완료','복사본 유지','모바일 미확인')

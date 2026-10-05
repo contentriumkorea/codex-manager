@@ -36,3 +36,17 @@ def test_import_into_new_home(tmp_path):
     assert result.state=='completed'
     assert Path(b.read_thread(tid)['cwd'])==tmp_path/'new-user'/'Restored'
     assert '테스트 A입니다' in str(b.read_thread(tid,True))
+
+
+def test_move_twice_then_backup_and_import(tmp_path):
+    a=CodexAdapter(tmp_path/'home',isolated=True);p,tid=make_project(a,tmp_path/'A','A');j=Journal(tmp_path/'j.sqlite')
+    for name in ('B','C'):
+        destination=tmp_path/name
+        result=transfer_project(a,p,{str(p.roots[0]):destination},j,tmp_path/'recovery')
+        assert result.state=='completed',result.errors
+        s=a.snapshot();p=next(x for x in s.projects if x.id==p.id);t=next(x for x in s.conversations if x.id==tid)
+        assert t.runtime_roots==(destination,)
+    bundle=tmp_path/'backup';export_project(p,a.snapshot(),bundle)
+    b=CodexAdapter(tmp_path/'target-home',isolated=True)
+    assert import_bundle(bundle,{'root-01':tmp_path/'D'},b,Journal(tmp_path/'import.sqlite')).state=='completed'
+    assert next(t for t in b.snapshot().conversations if t.id==tid).runtime_roots==(tmp_path/'D',)

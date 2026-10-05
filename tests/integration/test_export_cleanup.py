@@ -6,6 +6,7 @@ from project_manager.cleanup import cleanup_export
 from project_manager.codex.adapter import CodexAdapter
 from project_manager.journal import Journal
 from test_operations import make_project
+from test_codex_portability import append_continuation
 
 
 def test_export_restore_proof_then_cleanup(tmp_path):
@@ -17,8 +18,7 @@ def test_export_restore_proof_then_cleanup(tmp_path):
     assert not verify_restored_bundle(bundle,target).ok
     # Simulate a successful post-import turn only in the disposable fixture.
     t=next(t for t in target.snapshot().conversations if t.id==tid)
-    with t.rollout.open('a',encoding='utf-8') as f:
-        f.write(json.dumps({'type':'event_msg','payload':{'type':'task_complete','turn_id':'post-import-test'}})+'\n')
+    append_continuation(t.rollout)
     assert verify_restored_bundle(bundle,target).ok
     result=cleanup_export(p,bundle,source,Journal(tmp_path/'cleanup.sqlite'))
     assert result.state=='completed'

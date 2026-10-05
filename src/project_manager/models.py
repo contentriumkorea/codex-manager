@@ -23,6 +23,7 @@ class Conversation:
     title: str = ''
     rollout: Path|None = None
     updated_at: int = 0
+    attachments: tuple[dict,...] = ()
 
 
 @dataclass(frozen=True)

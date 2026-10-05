@@ -23,6 +23,16 @@ def write_rollout(path, thread_id, cwd):
     path.write_text('\n'.join(json.dumps(x,ensure_ascii=False) for x in records)+'\n',encoding='utf-8')
 
 
+def append_continuation(path):
+    records=[
+        {'type':'event_msg','payload':{'type':'task_started','turn_id':'fixture-continuation'}},
+        {'type':'response_item','payload':{'type':'message','role':'user','content':[{'type':'input_text','text':'계속 테스트'}]}},
+        {'type':'response_item','payload':{'type':'message','role':'assistant','content':[{'type':'output_text','text':'확인'}]}},
+        {'type':'event_msg','payload':{'type':'task_complete','turn_id':'fixture-continuation'}}]
+    with path.open('a',encoding='utf-8') as f:
+        for record in records: f.write(json.dumps(record,ensure_ascii=False)+'\n')
+
+
 def test_cross_home_rollout_restore(tmp_path):
     a = tmp_path/'a'; a.mkdir()
     b = tmp_path/'different-user'/'b'; b.mkdir(parents=True)

@@ -26,6 +26,8 @@ def load_manifest(bundle):
 
 
 def export_project(project, snapshot, destination, progress=lambda *_:None, cancelled=lambda:False):
+    if next((p for p in snapshot.projects if p.id==project.id),None)!=project:
+        raise ValueError('프로젝트 연결이 바뀌었습니다. 새로고침 후 다시 백업하세요.')
     roots={f'root-{i+1:02d}':p for i,p in enumerate(project.roots)}
     errors=validate_paths(tuple(roots.values()),(destination,),())
     if errors: raise ValueError('\n'.join(errors))
@@ -61,6 +63,8 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
             raise ValueError(f'백업 중 대화가 바뀌었습니다: {t.title}')
         record=asdict(t);record['rollout']=target.relative_to(destination).as_posix()
         manifest['conversations'].append(record)
+        if t.attachments:
+            manifest['dependencies'].append({'kind':'thread_attachments','thread_id':t.id,'resolved':False,'metadata':t.attachments})
         if t.project_id!=project.id: manifest['dependencies'].append({'kind':'cross_project_child','thread_id':t.id})
         # Only explicit image/attachment file references; command text is history.
         for line in target.open(encoding='utf-8'):
@@ -104,15 +108,31 @@ def verify_bundle(bundle: Path):
             if not path.is_file() or path.stat().st_size!=entry['size'] or digest(path)!=entry['sha256']:
                 raise ValueError(f"백업 파일 검증 실패: {entry['path']}")
         if 'manifest.json' not in expected: raise ValueError('매니페스트 해시가 없습니다.')
+        actual=set()
+        for folder,dirs,names in os.walk(bundle):
+            for name in (*dirs,*names): safe_child(bundle,(Path(folder)/name).relative_to(bundle).as_posix())
+            for name in names:
+                relative=(Path(folder)/name).relative_to(bundle).as_posix()
+                if relative not in ('checksums.jsonl','verification.json'): actual.add(relative)
+        if actual!=set(expected): raise ValueError('백업에 검증 목록과 다른 파일이 있습니다.')
+        declared={'manifest.json'}
+        root_ids={r['id'] for r in m['roots']}
+        if len(root_ids)!=len(m['roots']): raise ValueError('중복 루트 ID입니다.')
         for r in m['roots']:
             safe_child(bundle,r['bundle_path'])
+            if r['bundle_path']!=f"files/{r['id']}": raise ValueError('루트 폴더 경로가 올바르지 않습니다.')
         for t in m['conversations']:
             safe_child(bundle,t['rollout'])
             if t['rollout'] not in expected: raise ValueError('대화 기록의 해시가 없습니다.')
+            declared.add(t['rollout'])
         for e in m['inventory']:
             name=f"files/{e['root_id']}/{e['relative_path']}"
             safe_child(bundle,name)
             if name not in expected: raise ValueError('파일의 해시가 없습니다.')
+            if e['root_id'] not in root_ids or expected[name]['sha256']!=e['sha256'] or expected[name]['size']!=e['size']:
+                raise ValueError('매니페스트와 검증 목록이 일치하지 않습니다.')
+            declared.add(name)
+        if declared!=set(expected): raise ValueError('매니페스트에 없는 파일이 검증 목록에 있습니다.')
         return Verification(True,evidence_path=bundle/'verification.json')
     except (OSError,ValueError,KeyError,TypeError) as exc: return Verification(False,(str(exc),))
 

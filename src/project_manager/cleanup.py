@@ -12,11 +12,15 @@ def cleanup_export(project,bundle,adapter,journal):
     if not check.ok: raise ValueError('\n'.join(check.errors))
     m=load_manifest(bundle)
     proof=json.loads((bundle/'verification.json').read_text(encoding='utf-8'))
-    if not proof.get('restore_verified') or proof.get('bundle_id')!=m['bundle_id']:
+    if not proof.get('restore_verified') or proof.get('bundle_id')!=m['bundle_id'] or proof.get('manifest_digest')!=digest(bundle/'manifest.json'):
         raise ValueError('복원 후 이어쓰기 검증이 기록된 백업이 필요합니다.')
     if m['project']['id']!=project.id: raise ValueError('선택한 프로젝트의 백업이 아닙니다.')
     if m['dependencies']: raise ValueError('외부 의존성이 있어 원본을 정리할 수 없습니다.')
     snapshot=adapter.snapshot()
+    actual_project=next((p for p in snapshot.projects if p.id==project.id),None)
+    paths=lambda roots:tuple(Path(r).resolve() for r in roots)
+    if not actual_project or paths(actual_project.roots)!=paths(m['project']['roots']):
+        raise ValueError('프로젝트 폴더 연결이 백업 이후 바뀌었습니다. 새 백업을 만드세요.')
     tids={t['id'] for t in m['conversations']}
     current=[t for t in snapshot.conversations if t.project_id==project.id]
     affected={t.id for t in current}
@@ -28,14 +32,19 @@ def cleanup_export(project,bundle,adapter,journal):
     expected={x['path']:x for x in (json.loads(line) for line in (bundle/'checksums.jsonl').read_text(encoding='utf-8').splitlines())}
     for t in snapshot.conversations:
         if t.id in tids:
-            key=next(r['rollout'] for r in m['conversations'] if r['id']==t.id)
+            original=next(r for r in m['conversations'] if r['id']==t.id)
+            if (t.project_id!=original['project_id'] or t.parent_id!=original['parent_id'] or
+                t.cwd.resolve()!=Path(original['cwd']).resolve() or paths(t.runtime_roots)!=paths(original['runtime_roots']) or
+                t.archived!=original['archived'] or t.attachments):
+                raise ValueError('대화 소속·부모·작업 폴더가 백업 이후 바뀌었습니다. 새 백업을 만드세요.')
+            key=original['rollout']
             if not t.rollout or digest(t.rollout)!=expected[key]['sha256']: raise ValueError('백업 이후 대화가 바뀌었습니다. 원본 정리를 중단했습니다.')
     sources={r['id']:Path(r['original_path']) for r in m['roots']}
     backup_roots={r['id']:bundle/r['bundle_path'] for r in m['roots']}
     inv=scan_roots(sources,True)
     signatures=lambda entries:sorted((e['root_id'],e['relative_path'],e['size'],e['sha256']) for e in entries)
     from dataclasses import asdict
-    if inv.blockers or signatures([asdict(e) for e in inv.entries])!=signatures(m['inventory']):
+    if inv.blockers or signatures([asdict(e) for e in inv.entries])!=signatures(m['inventory']) or set(inv.directories)!=set(tuple(x) for x in m['directories']):
         raise ValueError('원본 파일이 바뀌었습니다. 원본 정리를 중단했습니다.')
     if validate_paths(tuple(sources.values()),tuple(backup_roots.values()),(adapter.home,)):
         raise ValueError('원본 정리에 사용할 경로가 안전하지 않습니다.')
@@ -43,7 +52,7 @@ def cleanup_export(project,bundle,adapter,journal):
         if p.id!=project.id and any(r.resolve().is_relative_to(s.resolve()) or s.resolve().is_relative_to(r.resolve()) for r in p.roots for s in sources.values()):
             raise ValueError(f'다른 프로젝트와 폴더를 공유합니다: {p.name}')
     operation_id=uuid.uuid4().hex
-    journal.begin(operation_id,{'kind':'export-cleanup','resources':[project.id],'bundle':str(bundle),'source':project.id})
+    journal.begin(operation_id,{'kind':'export-cleanup','home':str(adapter.home),'resources':[project.id],'bundle':str(bundle),'source':project.id})
     try:
         journal.record(operation_id,'cleaning',{})
         child_ids={t.id for t in snapshot.conversations if t.id in tids and t.parent_id in tids}
@@ -53,7 +62,7 @@ def cleanup_export(project,bundle,adapter,journal):
         check=remove_verified_files(inv,sources,backup_roots)
         if not check.ok: raise ValueError('\n'.join(check.errors))
         adapter.delete_project(project.id)
-        adapter.sync_desktop_state([],{tid:None for tid in tids},[project.id])
+        adapter.sync_desktop_state([],{tid:None for tid in tids},[project.id],deleted=tids)
         journal.record(operation_id,'completed',{})
         return OperationResult('completed','백업 검증 완료','대화 삭제 완료','원본 파일 정리 완료','모바일 미확인')
     except Exception as exc:

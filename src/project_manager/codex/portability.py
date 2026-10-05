@@ -21,11 +21,12 @@ def prepare_rollout(source: Path, home: Path, cwd: Path, runtime_roots: tuple[Pa
         timestamp=(datetime.fromisoformat(timestamp)+timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%S')
         target=target_dir/f"rollout-{timestamp.replace(':','-')}-{tid}.jsonl"
     temporary = target.with_suffix('.partial')
-    last_context=-1;last_environment=-1
+    last_context=-1;last_environment=-1;last_settings=-1
     with source.open(encoding='utf-8') as stream:
         for index,line in enumerate(stream):
             item=json.loads(line)
             if item.get('type')=='turn_context': last_context=index
+            if item.get('type')=='event_msg' and item.get('payload',{}).get('type')=='thread_settings_applied': last_settings=index
             if item.get('type')=='world_state' and 'cwd' in item.get('payload',{}).get('state',{}).get('environments',{}).get('environments',{}).get('local',{}):
                 last_environment=index
     first['payload']['cwd'] = str(cwd.resolve())
@@ -45,6 +46,10 @@ def prepare_rollout(source: Path, home: Path, cwd: Path, runtime_roots: tuple[Pa
                     local=state['payload']['state']['environments']['environments']['local']
                     local['cwd']=str(cwd.resolve())
                     dst.write(json.dumps(state,ensure_ascii=False)+'\n')
+                elif index==last_settings:
+                    event=json.loads(line);settings=event['payload']['thread_settings']
+                    settings['cwd']=str(cwd.resolve());settings['runtime_workspace_roots']=[str(p.resolve()) for p in runtime_roots]
+                    dst.write(json.dumps(event,ensure_ascii=False)+'\n')
                 else: dst.write(line)
             dst.flush(); os.fsync(dst.fileno())
         os.replace(temporary, target)
