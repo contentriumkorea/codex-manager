@@ -102,8 +102,8 @@ class UpdateManager(QObject):
         self.changed.emit()
 
     def _apply(self):
-        if self.window.workers:
-            self.state='waiting';self.message='진행 중인 작업이 끝나면 자동으로 설치합니다.';self.changed.emit()
+        if self.window.workers or not self.window.stop_background():
+            self.state='waiting';self.message='진행 중인 작업을 마무리하면 자동으로 설치합니다.';self.changed.emit()
             QTimer.singleShot(100,self._resume);return
         if not self.window.save_settings():
             self.state='error';self.message=self.window.footer.text();self.requested=False;self.changed.emit();return

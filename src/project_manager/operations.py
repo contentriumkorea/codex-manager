@@ -60,6 +60,11 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
         if any(t.project_id not in (None,source.id) for t in children):
             raise ValueError('다른 프로젝트의 자식 대화가 연결돼 있습니다. 함께 처리할 범위를 먼저 확인하세요.')
         conversations.extend(children);selected.update(t.id for t in children)
+    from .grouping import display_membership
+    from .settings import read_settings
+    inferred=display_membership(snapshot,read_settings(adapter.home/'.codex-global-state.json')).inferred
+    if any(pid==source.id and tid not in selected for tid,pid in inferred.items()):
+        raise ValueError('폴더 기준 대화의 연결이 아직 확정되지 않았습니다. 새로고침하고 연결을 확정한 뒤 이동하세요.')
     if target and target.id==source.id: raise ValueError('같은 프로젝트에 합칠 수 없습니다.')
     roots={f'root-{i+1:02d}':r for i,r in enumerate(source.roots)}
     dest={rid:Path(destinations[str(root)]).resolve() for rid,root in roots.items()}
@@ -156,6 +161,12 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
     errors=validate_paths(tuple(src.values()),tuple(dest.values()),(adapter.home,))
     if errors: raise ValueError('\n'.join(errors))
     # Copy exactly the verified manifest, never files added after verification.
+    mapping={clean_path(r['original_path']):dest[r['id']] for r in m['roots']}
+    mapped={}
+    for t in m['conversations']:
+        cwd=map_path(clean_path(t['cwd']),mapping)
+        runtime=tuple(map_path(clean_path(p),mapping) for p in t.get('runtime_roots',[])) or (cwd,)
+        mapped[t['id']]=(cwd,runtime)
     entries=[]
     for e in m['inventory']:
         path=safe_child(src[e['root_id']],e['relative_path']);stat=path.stat()
@@ -170,11 +181,9 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
         journal.record(operation_id,'verified',{})
         pid=adapter.create_project(m['project']['name'],tuple(dest.values()),'import-'+m['bundle_id'])
         journal.record(operation_id,'relinking',{'project_id':pid})
-        mapping={clean_path(r['original_path']):dest[r['id']] for r in m['roots']}
         for t in m['conversations']:
             if cancelled(): raise ValueError('가져오기를 취소했습니다. 이미 등록한 항목은 작업 기록에서 확인하세요.')
-            cwd=map_path(clean_path(t['cwd']),mapping)
-            runtime=tuple(map_path(clean_path(p),mapping) for p in t.get('runtime_roots',[])) or (cwd,)
+            cwd,runtime=mapped[t['id']]
             if t['id'] not in existing:
                 journal.record(operation_id,'registering',{'thread_id':t['id'],'project_id':pid,'cwd':str(cwd),'runtime_roots':runtime})
                 adapter.import_conversation(safe_child(bundle,t['rollout']),t['id'],cwd,runtime,pid)

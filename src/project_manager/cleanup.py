@@ -28,6 +28,11 @@ def cleanup_export(project,bundle,adapter,journal):
         children={t.id for t in snapshot.conversations if t.parent_id in affected}
         if children<=affected: break
         affected.update(children)
+    from .grouping import display_membership
+    from .settings import read_settings
+    inferred=display_membership(snapshot,read_settings(adapter.home/'.codex-global-state.json')).inferred
+    if any(pid==project.id and tid not in affected for tid,pid in inferred.items()):
+        raise ValueError('폴더 기준 대화의 연결이 아직 확정되지 않았습니다. 새로고침하고 연결을 확정한 뒤 새 백업을 만드세요.')
     if affected!=tids: raise ValueError('대화 목록이 백업 이후 바뀌었습니다. 새 백업을 만드세요.')
     expected={x['path']:x for x in (json.loads(line) for line in (bundle/'checksums.jsonl').read_text(encoding='utf-8').splitlines())}
     for t in snapshot.conversations:

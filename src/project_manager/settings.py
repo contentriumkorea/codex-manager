@@ -13,6 +13,7 @@ def read_settings(path):
 def valid_settings(value):
     return (isinstance(value,dict)
         and ('home' not in value or isinstance(value['home'],str))
+        and ('homes' not in value or isinstance(value['homes'],list) and all(isinstance(p,str) and p for p in value['homes']))
         and ('backups' not in value or isinstance(value['backups'],list) and all(isinstance(p,str) and p for p in value['backups']))
         and ('startup_update_check' not in value or isinstance(value['startup_update_check'],bool)))
 

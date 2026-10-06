@@ -92,6 +92,17 @@ def read_catalog(home: Path, include_runtime=True,sqlite_home=None) -> Snapshot:
         db.row_factory=sqlite3.Row
         tables={r[0] for r in db.execute("select name from sqlite_master where type='table'")}
         if 'projects' in tables:
+            # A copied/moved home can retain a previous local home's explicit ID mapping.
+            # Only accept a unique recorded mapping whose target exists in this database.
+            native_ids={r[0] for r in db.execute('select id from projects')}
+            candidates={}
+            for host,aliases in state.get('app-server-project-id-by-legacy-project-id-by-host',{}).items():
+                if not host.startswith('local:') or not isinstance(aliases,dict):continue
+                for legacy,pid in aliases.items():
+                    if pid in native_ids:candidates.setdefault(legacy,set()).add(pid)
+            mappings=dict(mappings)
+            for legacy,pids in candidates.items():
+                if legacy not in mappings and len(pids)==1:mappings[legacy]=next(iter(pids))
             for row in db.execute('select * from projects'):
                 roots=tuple(clean_path(r[0]) for r in db.execute('select path from project_roots where project_id=? order by position',(row['id'],)))
                 aliases=tuple(k for k,v in mappings.items() if v==row['id'])

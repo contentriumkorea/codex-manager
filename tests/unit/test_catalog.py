@@ -61,3 +61,13 @@ def test_configured_sqlite_home_matches_server_catalog(tmp_path):
     c.executescript('CREATE TABLE projects(id,name); CREATE TABLE project_roots(project_id,position,path); CREATE TABLE threads(id,title,cwd,project_id,rollout_path,archived,updated_at,has_user_event);')
     c.execute('INSERT INTO projects VALUES (?,?)',('p','P'));c.commit();c.close()
     assert read_catalog(home).projects[0].id=='p'
+
+
+def test_copied_home_uses_recorded_old_home_mapping_without_duplicate_projects(tmp_path):
+    c=sqlite3.connect(tmp_path/'state_5.sqlite')
+    c.executescript('CREATE TABLE projects(id,name); CREATE TABLE project_roots(project_id,position,path); CREATE TABLE threads(id,title,cwd,project_id,rollout_path,archived,updated_at);')
+    c.execute('INSERT INTO projects VALUES (?,?)',('canonical','P'));c.execute('INSERT INTO project_roots VALUES (?,?,?)',('canonical',0,str(tmp_path/'files')))
+    c.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?)',('t','T',str(tmp_path/'files'),None,'missing',0,1));c.commit();c.close()
+    (tmp_path/'.codex-global-state.json').write_text(json.dumps({'local-projects':{'legacy':{'name':'P','rootPaths':[str(tmp_path/'files')]}},'thread-project-assignments':{'t':{'projectId':'legacy','projectKind':'local'}},'app-server-project-id-by-legacy-project-id-by-host':{'local:C:\\old-home':{'legacy':'canonical'}}}))
+    s=read_catalog(tmp_path)
+    assert len(s.projects)==1 and s.conversations[0].project_id=='canonical'

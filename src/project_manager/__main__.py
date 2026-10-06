@@ -43,7 +43,7 @@ def main():
         window.refresh(window.adapter.snapshot(include_runtime=False));window.project_list.setCurrentRow(0)
         from PySide6.QtCore import QTimer
         def capture():
-            args.screenshot.parent.mkdir(parents=True,exist_ok=True);window.grab().save(str(args.screenshot));app.quit()
+            args.screenshot.parent.mkdir(parents=True,exist_ok=True);window.grab().save(str(args.screenshot));window.close()
         QTimer.singleShot(300,capture)
     return app.exec()
 

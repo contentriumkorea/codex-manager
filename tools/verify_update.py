@@ -38,7 +38,8 @@ def verify(release_dir,root):
         backup=Path(plan['backup'])
         assert (backup/'user-note.txt').read_text(encoding='utf-8')=='retained user file'
         assert not (backup/'CodexManager.exe').exists()
-        assert json.loads((state/'settings.json').read_text(encoding='utf-8'))==settings
+        actual=json.loads((state/'settings.json').read_text(encoding='utf-8'))
+        assert all(actual.get(key)==value for key,value in settings.items())
         assert list((state/'updates').glob('recover-*.cmd'))
         print(json.dumps({'state':'passed','version':VERSION,'root':str(root),'ready_seconds':round(ready_seconds,3),'total_seconds':round(time.monotonic()-started,3),'health':health,'result':record}))
     finally:

@@ -1,5 +1,6 @@
 QWidget { background: #171717; color: #E5E5E5; font-family: '맑은 고딕', 'Segoe UI'; font-size: 13px; }
 QWidget#sidebar { background: #111111; border-right: 1px solid #333333; }
+QLabel { background: transparent; }
 QLabel#brand { font-size: 17px; font-weight: 600; padding: 8px 0; }
 QLabel#heading { font-size: 23px; font-weight: 600; }
 QLabel#muted { color: #A3A3A3; }
@@ -11,6 +12,8 @@ QPushButton#primary { background: #E5E5E5; color: #171717; border: 0; }
 QPushButton#nav { border: 0; text-align: left; padding: 10px 8px; }
 QPushButton#nav:checked { background: #262626; }
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox { background: #1E1E1E; border: 1px solid #333333; border-radius: 6px; padding: 8px; selection-background-color: #444444; }
+QComboBox { padding-right: 24px; }
+QComboBox::drop-down { border: 0; width: 22px; background: transparent; }
 QListWidget { background: transparent; border: 0; outline: 0; }
 QListWidget::item { border-radius: 7px; padding: 11px 10px; margin: 2px 0; }
 QListWidget::item:selected { background: #262626; color: #E5E5E5; }
@@ -23,5 +26,10 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 QProgressBar { border: 1px solid #333333; border-radius: 4px; text-align: center; }
 QProgressBar::chunk { background: #A3A3A3; }
 QWidget:focus { outline: 0; }
-QPushButton:focus, QLineEdit:focus, QListWidget:focus { border: 1px solid #A3A3A3; }
+QPushButton:focus, QLineEdit:focus { border: 1px solid #777777; }
+QListWidget:focus { border: 0; outline: 0; }
+QListWidget::item:selected:hover { background: #262626; }
+QScrollBar:horizontal { background: transparent; height: 8px; }
+QScrollBar::handle:horizontal { background: #444444; border-radius: 4px; min-width: 25px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QDialog { background: #171717; }

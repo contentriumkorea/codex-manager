@@ -46,3 +46,13 @@ def test_project_files_named_like_bundle_metadata_are_included(tmp_path):
     b=tmp_path/'bundle';assert export_project(p,s,b).ok
     assert verify_bundle(b).ok
     assert (b/'files/root-01/verification.json').read_text()=='user data'
+
+
+def test_folder_grouped_chat_is_backed_up_without_rewriting_original_membership(tmp_path):
+    from dataclasses import replace
+    p,s=sample(tmp_path);t=replace(s.conversations[0],project_id=None)
+    s=replace(s,conversations=(t,));b=tmp_path/'bundle'
+    assert export_project(p,s,b,folder_memberships={t.id:p.id}).ok
+    m=json.loads((b/'manifest.json').read_text(encoding='utf-8'))
+    assert m['conversations'][0]['project_id'] is None and m['folder_grouped_threads']==[t.id]
+    assert not m['dependencies'] and verify_bundle(b).ok and t.project_id is None

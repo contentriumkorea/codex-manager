@@ -44,14 +44,16 @@ def load_manifest(bundle):
     return m
 
 
-def export_project(project, snapshot, destination, progress=lambda *_:None, cancelled=lambda:False):
+def export_project(project, snapshot, destination, progress=lambda *_:None, cancelled=lambda:False,folder_memberships=None):
     if next((p for p in snapshot.projects if p.id==project.id),None)!=project:
         raise ValueError('프로젝트 연결이 바뀌었습니다. 새로고침 후 다시 백업하세요.')
     roots={f'root-{i+1:02d}':p for i,p in enumerate(project.roots)}
     errors=validate_paths(tuple(roots.values()),(destination,),())
     if errors: raise ValueError('\n'.join(errors))
     if destination.exists(): raise FileExistsError('백업 대상 폴더가 이미 있습니다. 새 폴더를 선택하세요.')
-    conversations=[t for t in snapshot.conversations if t.project_id==project.id]
+    folder_memberships=folder_memberships or {}
+    folder_ids={t.id for t in snapshot.conversations if t.project_id is None and folder_memberships.get(t.id)==project.id}
+    conversations=[t for t in snapshot.conversations if t.project_id==project.id or t.id in folder_ids]
     affected={t.id for t in conversations}
     while True:
         children=[t for t in snapshot.conversations if t.parent_id in affected and t.id not in affected]
@@ -64,7 +66,8 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
               'captured_at':datetime.now(timezone.utc).isoformat(),'project':asdict(project),
               'roots':[{'id':rid,'original_path':str(p),'bundle_path':f'files/{rid}'} for rid,p in roots.items()],
               'conversations':[],'dependencies':[],'snapshot_revision':snapshot.revision,
-              'inventory':[asdict(e) for e in inventory.entries], 'directories':inventory.directories}
+              'inventory':[asdict(e) for e in inventory.entries], 'directories':inventory.directories,
+              'folder_grouped_threads':sorted(folder_ids)}
     write_json(destination/'manifest.json',manifest)
     check=copy_verified(inventory,roots,{rid:destination/'files'/rid for rid in roots},progress,cancelled)
     if not check.ok: raise ValueError('\n'.join(check.errors))
@@ -84,7 +87,9 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
         manifest['conversations'].append(record)
         if t.attachments:
             manifest['dependencies'].append({'kind':'thread_attachments','thread_id':t.id,'resolved':False,'metadata':t.attachments})
-        if t.project_id!=project.id: manifest['dependencies'].append({'kind':'cross_project_child','thread_id':t.id})
+        if t.project_id!=project.id and t.id not in folder_ids: manifest['dependencies'].append({'kind':'cross_project_child','thread_id':t.id})
+        if any(not any(path.resolve().is_relative_to(root.resolve()) for root in project.roots) for path in (t.cwd,*t.runtime_roots)):
+            manifest['dependencies'].append({'kind':'external_workspace','thread_id':t.id,'resolved':False})
         # Only explicit image/attachment file references; command text is history.
         for line in target.open(encoding='utf-8'):
             item=json.loads(line)

@@ -58,3 +58,15 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Final packaged v0.2.1 updater passed two native swaps, readiness acknowledgments, version/path/PID startup health, settings retention and unknown-file preservation. The archived v0.2.0 production updater/helper also installed the new package successfully.
 - A private frozen Qt driver exercised the production update button against the final ZIP: one click, 16 ms click return, 0.899 s to parent exit after helper readiness, 21.306 s to healthy replacement on this computer. Timing is measured environment behavior, not a universal duration guarantee.
 - Actual account continuation, physical second-PC and mobile checks remain pending; fixture results do not certify those environments.
+
+2026-10-06 Codex Manager v0.2.2:
+- Removed the bright project-list focus border; verified the packaged dark UI and transparent sidebar labels in a rendered fixture screenshot.
+- Automatically calculate all project folder sizes without hashing file contents or blocking the GUI. Default descending size order, alternative sort orders, selected-project retention, cancellation, and explicitly partial results are covered.
+- Read-only folder/parent grouping corrected 2,003 previously unassigned display entries in the actual catalog. Source memberships were not changed. The remaining 63 comprise 61 unmatched old/outside paths and two explicitly projectless chats.
+- Folder-grouped chats are included in read-only backups, preserving original membership in the manifest. Explicit connection is required before move/merge/cleanup. Fresh backend checks prevent newly inferred chats being silently left behind. Uncaptured external workspace dependencies block import before mutation.
+- Added bounded read-only multi-home discovery, retained registered/offline homes, a store selector and additional search locations. Atomic background verification preserves the previous adapter and screen when a switch fails. A copied-home catalog uses only unique recorded ID mappings, never guessed paths.
+- Actual default discovery visited 10,234 directories in 4.156 seconds and found one store. Two-store switching, generated-directory exclusion, cancellation, and failed-switch recovery were verified with isolated fixtures.
+- Final full suite: 121 passed, 54.07 seconds. Independent final review found no remaining Critical/Important blocker in its reviewed scope; focused 24 tests passed.
+- Final production package updater passed helper readiness, swap, version/path/PID startup health, settings retention and preservation of unknown user files.
+- A private frozen driver exercised the production Qt install button against the final ZIP: one click, 15 ms click return, 0.854 seconds to parent exit and 10.772 seconds to healthy v0.2.2 on this computer. Public asset verification and post-publication acceptance are recorded separately in the release evidence.
+- No original user project/chat was moved, linked or deleted for these checks. Actual account continuation, physical second-PC and mobile checks remain pending.
