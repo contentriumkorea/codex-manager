@@ -2,10 +2,12 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication,QMessageBox
+from PySide6.QtCore import QLockFile
 from .codex.adapter import CodexAdapter
 from .ui.window import MainWindow
 from .version import APP_NAME,VERSION
+from .settings import read_settings
 
 
 def main():
@@ -18,13 +20,19 @@ def main():
     parser.add_argument('--version',action='version',version=APP_NAME+' '+VERSION)
     args=parser.parse_args()
     if args.home is None:
-        import json
         settings=args.state_dir/'settings.json'
-        try: saved=json.loads(settings.read_text(encoding='utf-8')).get('home') if settings.exists() else None
-        except (ValueError,OSError): saved=None
+        saved=read_settings(settings).get('home')
+        if not isinstance(saved,str): saved=None
         args.home=Path(saved or os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))
     app=QApplication(sys.argv[:1]);app.setApplicationName(APP_NAME);app.setOrganizationName('Contentrium')
-    window=MainWindow(CodexAdapter(args.home),args.state_dir,auto_refresh=not args.screenshot,start_update_check=not args.no_update_check)
+    try:
+        args.state_dir.mkdir(parents=True,exist_ok=True)
+        instance=QLockFile(str(args.state_dir/'application.lock'));instance.setStaleLockTime(0)
+        if not instance.tryLock(0):
+            QMessageBox.information(None,APP_NAME,'같은 설정을 사용하는 Codex Manager가 이미 실행 중입니다. 열린 프로그램을 사용하세요.');return 0
+        window=MainWindow(CodexAdapter(args.home),args.state_dir,auto_refresh=not args.screenshot,start_update_check=not args.no_update_check)
+    except Exception as exc:
+        QMessageBox.critical(None,APP_NAME,'프로그램을 시작하지 못했습니다. 설정 폴더와 파일 상태를 확인하세요.\n'+str(exc));return 1
     window.show()
     if args.update_health:
         from .bundles import write_json

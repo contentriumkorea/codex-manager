@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-manager"
-version = "0.2.0"
+version = "0.2.1"
 requires-python = ">=3.10"
-dependencies = ["PySide6"]
+dependencies = ["PySide6", "tomli>=2; python_version < '3.11'"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

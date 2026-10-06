@@ -23,3 +23,14 @@ def test_timeout_after_mutation_requires_readback(tmp_path):
         with pytest.raises(TimeoutError):
             client.call('project/create', {}, timeout=.05)
         assert client.requests_sent == 1
+
+
+def test_initialization_failure_reaps_server_and_closes_pipes(tmp_path):
+    server=tmp_path/'server.py'
+    server.write_text("import sys,json\nfor line in sys.stdin:\n x=json.loads(line)\n if 'id' in x: print(json.dumps({'id':x['id'],'error':{'message':'initialization failed'}}),flush=True)\n")
+    client=CodexClient([sys.executable,str(server)])
+    try:
+        with pytest.raises(RpcError): client.__enter__()
+        assert client.process.poll() is not None
+        assert client.process.stdin.closed and client.process.stdout.closed
+    finally: client.__exit__()

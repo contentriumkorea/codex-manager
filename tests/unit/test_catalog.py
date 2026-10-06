@@ -52,3 +52,12 @@ def test_display_catalog_does_not_scan_raw_histories(tmp_path,monkeypatch):
     def forbidden(*args): raise AssertionError('display scanned history')
     monkeypatch.setattr(catalog,'active_runtime_roots',forbidden)
     assert catalog.read_catalog(tmp_path,include_runtime=False).conversations[0].title=='T'
+
+
+def test_configured_sqlite_home_matches_server_catalog(tmp_path):
+    home=tmp_path/'home';home.mkdir();database=tmp_path/'database';database.mkdir()
+    (home/'config.toml').write_text('sqlite_home = '+json.dumps(str(database))+'\n')
+    c=sqlite3.connect(database/'state_5.sqlite')
+    c.executescript('CREATE TABLE projects(id,name); CREATE TABLE project_roots(project_id,position,path); CREATE TABLE threads(id,title,cwd,project_id,rollout_path,archived,updated_at,has_user_event);')
+    c.execute('INSERT INTO projects VALUES (?,?)',('p','P'));c.commit();c.close()
+    assert read_catalog(home).projects[0].id=='p'

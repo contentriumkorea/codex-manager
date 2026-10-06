@@ -11,16 +11,21 @@ function RequireChild([string]$child,[string]$parent) {
 function RequireNoLinks([string]$path) {
     $cursor=FullPath $path
     while ($cursor) {
-        if (Test-Path -LiteralPath $cursor) {
-            if ((Get-Item -LiteralPath $cursor -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked path rejected.' }
+        if ([IO.File]::Exists($cursor) -or [IO.Directory]::Exists($cursor)) {
+            if ([IO.File]::GetAttributes($cursor) -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked path rejected.' }
         }
         $parent=[IO.Path]::GetDirectoryName($cursor)
         if (!$parent -or $parent -eq $cursor) { break }
         $cursor=$parent
     }
 }
+function FileHash([string]$path) {
+    $algorithm=[Security.Cryptography.SHA256]::Create();$stream=[IO.File]::OpenRead($path)
+    try { [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','') }
+    finally { $stream.Dispose();$algorithm.Dispose() }
+}
 function WriteResult([string]$state,[string]$message) {
-    $record=@{ state=$state; message=$message; version=$taskPlan.version; backup=$taskPlan.backup }
+    $record=@{ state=$state; message=$message; version=$taskPlan.version; backup=$taskPlan.backup; elapsed_ms=$timer.ElapsedMilliseconds }
     [IO.File]::WriteAllText($taskPlan.result,($record|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
 }
 function WritePhase([string]$phase) {
@@ -42,8 +47,10 @@ $installationPath=FullPath $taskPlan.install_dir
 $stagedPath=FullPath $taskPlan.staged
 $backupPath=FullPath $taskPlan.backup
 $parentDirectory=[IO.Path]::GetDirectoryName($installationPath)
-$swapped=$false;$newProcess=$null;$healthy=$false;$pathsValidated=$false
+$swapped=$false;$newProcess=$null;$healthy=$false;$pathsValidated=$false;$mutex=$null;$locked=$false
+$timer=[Diagnostics.Stopwatch]::StartNew()
 try {
+    if ($taskPlan.id -notmatch '^[a-zA-Z0-9-]+$') { throw 'Invalid update identifier.' }
     if (!$parentDirectory -or (SamePath $installationPath ([IO.Path]::GetPathRoot($installationPath)))) { throw 'Drive root cannot be replaced.' }
     RequireChild $stagedPath $parentDirectory;RequireChild $backupPath $parentDirectory
     if (!(SamePath ([IO.Path]::GetDirectoryName($backupPath)) $parentDirectory) -or
@@ -57,6 +64,11 @@ try {
     $statusPath=Join-Path $updateState ($taskPlan.id+'.status.json');RequireChild $statusPath $updateState
     if ((SamePath $taskPlan.state_dir $installationPath) -or (FullPath $taskPlan.state_dir).StartsWith($installationPath+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Settings must remain outside application.' }
     RequireNoLinks $installationPath;RequireNoLinks $stagedPath;RequireNoLinks $backupPath;RequireNoLinks $updateState
+    $algorithm=[Security.Cryptography.SHA256]::Create()
+    $key=[BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($installationPath.ToLowerInvariant()))).Replace('-','');$algorithm.Dispose()
+    $mutex=[Threading.Mutex]::new($false,('Local\CodexManagerUpdate-'+$key))
+    try { $locked=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked=$true }
+    if (!$locked) { throw 'Another update installer is running.' }
     $pathsValidated=$true
     Set-Location -LiteralPath $updateState
     $previousStatus=$null
@@ -69,7 +81,7 @@ try {
         }
         if (Test-Path -LiteralPath $installationPath) {
             $manifestPath=Join-Path $installationPath 'install-manifest.json';RequireNoLinks $manifestPath
-            if (!$taskPlan.manifest_sha256 -or !(Test-Path -LiteralPath $manifestPath) -or (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne $taskPlan.manifest_sha256) { throw 'Changed installation retained; manual recovery needed.' }
+            if (!$taskPlan.manifest_sha256 -or !(Test-Path -LiteralPath $manifestPath) -or (FileHash $manifestPath) -ne $taskPlan.manifest_sha256) { throw 'Changed installation retained; manual recovery needed.' }
             $failedPath=$installationPath+'.failed-'+$taskPlan.id;RequireChild $failedPath $parentDirectory;RequireNoLinks $failedPath
             if (Test-Path -LiteralPath $failedPath) { throw 'Recovery destination already exists.' }
             Move-Item -LiteralPath $installationPath -Destination $failedPath
@@ -77,18 +89,24 @@ try {
         Move-Item -LiteralPath $backupPath -Destination $installationPath
         WritePhase 'recovered';WriteResult 'recovered' 'Interrupted update restored to previous program.';StartPrevious;exit 0
     }
-    $newManifest=Get-Content -LiteralPath (Join-Path $stagedPath 'install-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $manifestPath=Join-Path $stagedPath 'install-manifest.json';RequireNoLinks $manifestPath
+    if ($taskPlan.manifest_sha256 -and (FileHash $manifestPath) -ne $taskPlan.manifest_sha256) { throw 'Manifest changed after preparation.' }
+    $newManifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($newManifest.version -ne $taskPlan.version) { throw 'Version mismatch.' }
     foreach ($file in $newManifest.files.PSObject.Properties) {
         $path=Join-Path $stagedPath $file.Name;RequireChild $path $stagedPath;RequireNoLinks $path
-        if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $file.Value) { throw 'Staged hash mismatch.' }
+        if ((FileHash $path) -ne $file.Value) { throw 'Staged hash mismatch.' }
     }
     if (!(Test-Path -LiteralPath (Join-Path $installationPath 'CodexManager.exe')) -or !(Test-Path -LiteralPath (Join-Path $stagedPath 'CodexManager.exe'))) { throw 'Executable missing.' }
-    $parentProcess=Get-Process -Id $taskPlan.parent_pid -ErrorAction SilentlyContinue
-    if ($parentProcess) { $parentProcess|Wait-Process -Timeout 60 }
     foreach ($other in @(Get-Process -Name CodexManager -ErrorAction SilentlyContinue)) {
-        if ($other.Path -and (SamePath $other.Path (Join-Path $installationPath 'CodexManager.exe'))) { throw 'Another app instance is running.' }
+        if ($other.Id -ne $taskPlan.parent_pid -and $other.Path -and (SamePath $other.Path (Join-Path $installationPath 'CodexManager.exe'))) { throw 'Another app instance is running.' }
     }
+    if ($taskPlan.ready) {
+        RequireChild $taskPlan.ready $updateState;RequireNoLinks $taskPlan.ready
+        [IO.File]::WriteAllText($taskPlan.ready,(@{id=$taskPlan.id;version=$taskPlan.version;pid=$PID;elapsed_ms=$timer.ElapsedMilliseconds}|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+    }
+    $parentProcess=Get-Process -Id $taskPlan.parent_pid -ErrorAction SilentlyContinue
+    if ($parentProcess) { $parentProcess|Wait-Process -Timeout 30 }
     WritePhase 'replacing'
     Move-Item -LiteralPath $installationPath -Destination $backupPath
     try { Move-Item -LiteralPath $stagedPath -Destination $installationPath }
@@ -113,15 +131,15 @@ try {
     try {
       $oldManifestPath=Join-Path $backupPath 'install-manifest.json'
       if (Test-Path -LiteralPath $oldManifestPath) {
-        $oldHash=(Get-FileHash -LiteralPath $oldManifestPath -Algorithm SHA256).Hash
+        $oldHash=FileHash $oldManifestPath
         $oldManifest=Get-Content -LiteralPath $oldManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($file in $oldManifest.files.PSObject.Properties) {
             try {
                 $path=Join-Path $backupPath $file.Name;RequireChild $path $backupPath;RequireNoLinks $path
-                if ((Test-Path -LiteralPath $path -PathType Leaf) -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq $file.Value) { Remove-Item -LiteralPath $path }
+                if ((Test-Path -LiteralPath $path -PathType Leaf) -and (FileHash $path) -eq $file.Value) { Remove-Item -LiteralPath $path }
             } catch { } # Retain changed, unreadable, or linked items.
         }
-        if ((Get-FileHash -LiteralPath $oldManifestPath -Algorithm SHA256).Hash -eq $oldHash) { Remove-Item -LiteralPath $oldManifestPath }
+        if ((FileHash $oldManifestPath) -eq $oldHash) { Remove-Item -LiteralPath $oldManifestPath }
         RemoveEmptyFolders $backupPath
       }
       if ((Test-Path -LiteralPath $stageDirectory) -and @(Get-ChildItem -LiteralPath $stageDirectory -Force).Count -eq 0) { Remove-Item -LiteralPath $stageDirectory }
@@ -139,4 +157,7 @@ try {
     }
     if ($pathsValidated) { try { WriteResult 'failed' $message } catch {} }
     exit 1
+} finally {
+    if ($locked) { $mutex.ReleaseMutex() }
+    if ($mutex) { $mutex.Dispose() }
 }

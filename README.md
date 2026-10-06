@@ -4,7 +4,7 @@ Windows용 로컬 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로
 
 사용자는 [GitHub Releases](https://github.com/contentriumkorea/codex-manager/releases/latest)에서 Windows ZIP을 내려받아 압축을 풀고, `CodexManager` 폴더의 `CodexManager.exe`를 실행합니다. 폴더 전체를 보관하세요. [사용 안내](docs/user-guide.md)를 참고하세요.
 
-시작할 때 최신 정식 버전을 확인합니다. 새 버전이 있으면 변경 내용을 보고 **업데이트 설치·재시작**을 누를 수 있습니다. 앱의 **업데이트** 메뉴에서도 수동 확인과 시작 시 확인 설정을 제공합니다. 다운로드와 파일별 SHA-256을 검증한 뒤 교체하고, 새 프로그램이 정상 시작하지 않으면 이전 프로그램으로 복구합니다.
+시작할 때 최신 정식 버전을 확인하고 새 버전을 미리 다운로드·검증합니다. **지금 업데이트**를 누르면 바로 설치·재시작합니다. 다운로드 중에 누르면 진행률을 보여주며 준비되는 즉시 자동 설치합니다. 진행 중인 프로젝트 작업은 완료를 기다립니다. 앱의 **업데이트** 메뉴에서 수동 확인, 재시도, 준비 취소와 시작 시 확인 설정을 제공합니다. 설치 도우미의 준비 응답을 받은 뒤 앱을 닫고, 새 프로그램이 정상 시작하지 않으면 이전 프로그램으로 복구합니다.
 
 프로젝트·대화·작업 파일·백업을 프로그램 배포에 넣지 않습니다. 기존 설정 위치 `%LOCALAPPDATA%/ProjectConversationManager`를 유지합니다. 로컬 Codex용 독립 도구이며 OpenAI 공식 제품은 아닙니다.
 
@@ -14,7 +14,7 @@ Windows용 로컬 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로
 .venv/Scripts/python.exe -m pytest tests -q
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
 .venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.2.0 --root .test-artifacts/update-verification
+.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.2.1 --root .test-artifacts/update-verification
 .venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
 ```
 

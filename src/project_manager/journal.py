@@ -28,6 +28,10 @@ class Journal:
         with self.connect() as c:
             return [{'id':r[0],'state':r[1],'payload':json.loads(r[2])} for r in c.execute("SELECT id,state,payload FROM operations WHERE state NOT IN ('completed','cancelled')")]
 
+    def operation(self,operation_id):
+        with self.connect() as c: row=c.execute('SELECT state,payload FROM operations WHERE id=?',(operation_id,)).fetchone()
+        return {'id':operation_id,'state':row[0],'payload':json.loads(row[1])} if row else None
+
     def events(self,operation_id):
         with self.connect() as c:
             return [{'phase':r[0],'payload':json.loads(r[1])} for r in c.execute('SELECT phase,payload FROM events WHERE operation_id=? ORDER BY rowid',(operation_id,))]

@@ -17,8 +17,9 @@ from ..journal import Journal
 from ..operations import transfer_project,import_bundle,recover_operation,change_connections
 from ..restore_proof import verify_restored_bundle
 from .dialogs import confirm,confirm_transfer,ConnectionsDialog
-from .updates import UpdateChecker,UpdateDialog
+from .updates import UpdateChecker,UpdateDialog,UpdateManager
 from ..version import APP_NAME,VERSION
+from ..settings import read_settings,save_settings
 
 
 def bytes_text(size):
@@ -46,9 +47,10 @@ class MainWindow(QMainWindow):
         settings_path=self.state_dir/'settings.json'
         if settings_path.exists():
             try:
-                saved=json.loads(settings_path.read_text(encoding='utf-8'))
-                self.backups=[Path(p) for p in saved.get('backups',[]) if Path(p).exists()]
-                self.startup_update_check=saved.get('startup_update_check',True)
+                saved=read_settings(settings_path)
+                backups=saved.get('backups',[])
+                self.backups=[Path(p) for p in backups if isinstance(p,str) and p] if isinstance(backups,list) else []
+                self.startup_update_check=saved.get('startup_update_check',True) is not False
             except (ValueError,OSError): pass
         self.setWindowTitle(APP_NAME);self.resize(1260,810);self.setMinimumSize(950,630)
         self.setStyleSheet((Path(__file__).parent/'theme.qss').read_text(encoding='utf-8'))
@@ -91,6 +93,8 @@ class MainWindow(QMainWindow):
         split.addWidget(detail);split.setSizes([470,510])
         self.footer=QLabel('원본 파일과 대화를 함께 관리합니다.');self.footer.setObjectName('muted');content.addWidget(self.footer)
         self.set_mode('projects')
+        self.updater=UpdateManager(self);self.updater.handoff.connect(self.close)
+        self.updater.changed.connect(lambda:self.centralWidget().setEnabled(not (self.updater.requested or self.updater._close_requested)))
         self.update_checker=UpdateChecker(self);self.update_checker.checked.connect(self.update_checked);self.update_checker.failed.connect(self.update_failed)
         if auto_refresh: QTimer.singleShot(0,self.reload)
         if auto_refresh and start_update_check and self.startup_update_check: QTimer.singleShot(1000,lambda:self.check_updates(True))
@@ -103,12 +107,14 @@ class MainWindow(QMainWindow):
         return self.update_dialog
 
     def check_updates(self,startup=False):
+        if self.updater.requested: return
         self.update_popup_pending=self.update_popup_pending or startup
         if self.update_dialog: self.update_dialog.status.setText('업데이트 확인 중…')
         self.update_checker.check()
 
     def update_checked(self,release):
         self.latest_release=release
+        self.updater.prepare(release)
         if self.update_dialog: self.update_dialog.show_release(release)
         if self.update_popup_pending and release and release.available:
             if self.workers: QTimer.singleShot(1000,lambda:self.update_checked(release));return
@@ -159,7 +165,7 @@ class MainWindow(QMainWindow):
         elif self.mode=='backups':
             for bundle in self.backups:
                 try: m=load_manifest(bundle);name=m['project']['name']
-                except Exception: name='확인 필요한 백업'
+                except Exception: name='연결되지 않은 백업' if not bundle.exists() else '확인 필요한 백업'
                 item=QListWidgetItem(name+'\n'+str(bundle));item.setData(Qt.UserRole,str(bundle));self.project_list.addItem(item)
         else:
             for operation in self.journal.pending():
@@ -178,7 +184,7 @@ class MainWindow(QMainWindow):
                 try:
                     m=load_manifest(bundle);proof=json.loads((bundle/'verification.json').read_text(encoding='utf-8'))
                     if m['project']['id']==p.id and proof.get('restore_verified'): self.cleanup_button.setEnabled(True)
-                except (ValueError,OSError): pass
+                except (ValueError,OSError,TypeError,AttributeError): pass
             self.detail_title.setText(p.name)
             for path in p.roots:
                 item=QListWidgetItem(str(path)+('' if path.exists() else '\n폴더 없음'));item.setToolTip(str(path));item.setData(Qt.UserRole,str(path));self.folder_list.addItem(item)
@@ -197,13 +203,18 @@ class MainWindow(QMainWindow):
                 self.active_bundle=Path(item.data(Qt.UserRole))
                 try:
                     m=load_manifest(self.active_bundle);self.detail_title.setText(m['project']['name'])
+                    self.bundle_action.setEnabled(True);self.proof_action.setEnabled(True)
                     for r in m['roots']: self.folder_list.addItem(r['original_path'])
                     for t in m['conversations']:
                         i=QListWidgetItem(t['title']);i.setData(Qt.UserRole,t['id']);self.thread_list.addItem(i)
                     self.detail_status.setText('대화가 포함된 백업\n복원 전에 파일 무결성과 경로를 검사합니다.')
-                except Exception as exc: self.detail_status.setText(str(exc))
+                except Exception as exc:
+                    self.detail_status.setText('백업을 연결하거나 파일 상태를 확인하세요.\n'+str(exc))
+                    self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False)
 
     def run_job(self,title,func,done=None):
+        if self.updater.requested:
+            self.footer.setText('업데이트 설치가 진행 중입니다. 완료 후 작업할 수 있습니다.');return
         if self.workers: return
         dialog=QProgressDialog(title,'취소',0,0,self);dialog.setWindowTitle('작업 중');dialog.setWindowModality(Qt.WindowModal);dialog.setMinimumDuration(0);dialog.setAutoClose(False);dialog.setAutoReset(False)
         worker=Worker(func);self.workers.append(worker);dialog.canceled.connect(worker.cancelled.set)
@@ -219,6 +230,8 @@ class MainWindow(QMainWindow):
         worker.finished.connect(finish);worker.start()
 
     def show_result(self,result):
+        if self.updater.requested:
+            self.footer.setText('프로젝트 작업 완료 · 업데이트를 계속합니다.');return
         if hasattr(result,'state'):
             message='\n'.join([result.file_status,result.codex_status,result.cleanup_status,result.mobile_status,*result.errors])
             QMessageBox.information(self,'작업 결과',message)
@@ -312,7 +325,7 @@ class MainWindow(QMainWindow):
         for bundle in self.backups:
             try:
                 if load_manifest(bundle)['project']['id']==p.id and json.loads((bundle/'verification.json').read_text(encoding='utf-8')).get('restore_verified'): eligible.append(bundle)
-            except (ValueError,OSError): pass
+            except (ValueError,OSError,TypeError,AttributeError): pass
         if not eligible: QMessageBox.information(self,'백업 후 정리','다른 저장소에서 복원 후 이어쓰기 확인을 마친 백업을 먼저 열어주세요.');return
         bundle=eligible[-1]
         if not confirm(self,'백업 후 원본 정리',p.name+'\n\n보존할 백업\n'+str(bundle)+'\n\n삭제할 원본 폴더\n'+'\n'.join(str(r) for r in p.roots)+'\n\n이 프로젝트의 대화와 원본 파일을 삭제합니다. 백업 이후 변경이 있으면 중단합니다.'): return
@@ -332,7 +345,9 @@ class MainWindow(QMainWindow):
 
     def restore(self):
         if not self.active_bundle or not self.guard_change(): return
-        bundle=self.active_bundle;m=load_manifest(bundle)
+        bundle=self.active_bundle
+        try: m=load_manifest(bundle)
+        except (ValueError,OSError) as exc: QMessageBox.warning(self,'백업 확인','백업을 다시 연결하거나 확인하세요.\n'+str(exc));return
         parent=QFileDialog.getExistingDirectory(self,'복원할 상위 폴더')
         if not parent: return
         destinations={r['id']:(Path(parent)/clean_path(r['original_path']).name if len(m['roots'])==1 else Path(parent)/r['id']/clean_path(r['original_path']).name) for r in m['roots']}
@@ -350,10 +365,11 @@ class MainWindow(QMainWindow):
         text='작업 상태: '+data['state']+'\n\n'+error+'\n\n'
         if recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
         elif data['payload']['kind']=='connections': text+='이전 프로젝트 이름·폴더 연결·대화 소속을 복구합니다.'
+        elif data['payload']['kind']=='export-cleanup': text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n정리 중 삭제된 대화와 파일을 백업에서 복구합니다. 남아 있는 대화와 변경된 파일은 보존합니다.'
         else: text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n중단된 가져오기를 이어서 검증합니다.'
         if not confirm(self,'작업 복구',text) or not self.guard_change(): return
         bundle_override=None
-        if data['payload']['kind']=='import':
+        if data['payload']['kind'] in ('import','export-cleanup'):
             selected=QFileDialog.getExistingDirectory(self,'중단된 작업의 백업 폴더 선택',data['payload'].get('bundle',''))
             if not selected: return
             bundle_override=Path(selected)
@@ -368,11 +384,12 @@ class MainWindow(QMainWindow):
         self.run_job('복원 결과 확인',lambda w:verify_restored_bundle(bundle,self.adapter),done)
 
     def save_settings(self):
-        from ..bundles import write_json
         path=self.state_dir/'settings.json'
-        try: old=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
-        except (ValueError,OSError): old={}
-        write_json(path,{**old,'home':str(self.adapter.home),'backups':[str(p) for p in self.backups],'startup_update_check':self.startup_update_check})
+        try:
+            save_settings(path,{'home':str(self.adapter.home),'backups':[str(p) for p in self.backups],'startup_update_check':self.startup_update_check})
+            return True
+        except OSError as exc:
+            self.footer.setText('설정을 저장하지 못했습니다: '+str(exc));return False
 
     def assign_unassigned(self):
         item=self.project_list.currentItem()
@@ -386,6 +403,7 @@ class MainWindow(QMainWindow):
         self.run_job('대화 연결',lambda w:change_connections(self.adapter,p,{tid:p.id},self.journal),self.show_result)
 
     def choose_home(self):
+        if self.workers or self.updater.requested: self.footer.setText('진행 중인 작업을 마친 뒤 저장소를 바꿀 수 있습니다.');return
         path=QFileDialog.getExistingDirectory(self,'Codex 저장소 선택',str(self.adapter.home))
         if not path: return
         from ..codex.adapter import CodexAdapter
@@ -394,4 +412,5 @@ class MainWindow(QMainWindow):
     def closeEvent(self,event):
         if self.workers:
             QMessageBox.information(self,'작업 중','진행 중인 작업을 취소하거나 완료한 뒤 닫으세요.');event.ignore()
+        elif not self.updater.close_when_idle(): event.ignore()
         else: self.save_settings();event.accept()

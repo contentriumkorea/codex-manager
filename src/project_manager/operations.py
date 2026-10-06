@@ -208,7 +208,9 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
 
 def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundle_override=None):
     adapter.ensure_write_allowed()
-    operation=next(p for p in journal.pending() if p['id']==operation_id)
+    operation=journal.operation(operation_id)
+    if not operation: raise ValueError('복구할 작업을 찾을 수 없습니다.')
+    if operation['state']=='completed': return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지')
     payload=operation['payload']
     if Path(payload['home']).resolve()!=adapter.home.resolve(): raise ValueError('작업을 시작한 Codex 저장소를 선택하세요: '+payload['home'])
     if payload['kind']=='connections':
@@ -220,6 +222,9 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundl
         return OperationResult('completed','파일 유지','이전 연결 복구 완료','원본 파일 유지')
     if payload['kind']=='import':
         return import_bundle(Path(bundle_override or payload['bundle']),{k:Path(v) for k,v in payload['destinations'].items()},adapter,journal,progress,resume_id=operation_id)
+    if payload['kind']=='export-cleanup':
+        from .cleanup_recovery import recover_cleanup
+        return recover_cleanup(operation,Path(bundle_override or payload['bundle']),adapter,journal,progress)
     if payload['kind'] not in ('move','merge'): raise ValueError('이 작업은 검증된 백업에서 가져오기로 복구하세요.')
     recovery=Path(payload['recovery'])
     metadata=json.loads((recovery/'metadata.json').read_text(encoding='utf-8'))

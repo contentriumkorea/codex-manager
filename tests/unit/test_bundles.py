@@ -38,3 +38,11 @@ def test_manifest_path_escape_rejected(tmp_path):
 def test_target_inside_source_rejected(tmp_path):
     p,s=sample(tmp_path)
     with pytest.raises(ValueError): export_project(p,s,p.roots[0]/'backup')
+
+
+def test_project_files_named_like_bundle_metadata_are_included(tmp_path):
+    p,s=sample(tmp_path)
+    for name in ('checksums.jsonl','verification.json'): (p.roots[0]/name).write_text('user data')
+    b=tmp_path/'bundle';assert export_project(p,s,b).ok
+    assert verify_bundle(b).ok
+    assert (b/'files/root-01/verification.json').read_text()=='user data'

@@ -45,3 +45,16 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Actual rollback test asserts the failed replacement was swapped before restoration. Persisted first-rename interruption recovery tested separately.
 - Full suite: 66 passed, 38.71 s. Native packaged install completed with version/path/PID health handshake; only verified prior program files removed, unknown user file and settings retained.
 - No live user project/chat was moved or removed for updater verification. Actual other-PC/mobile continuation remains pending.
+
+2026-10-06 Codex Manager v0.2.1 audit and publishing:
+- Stable update discovery now prepares and verifies files in the background. Ready-button clicks launch installation immediately; clicks during download install automatically when ready. Active project jobs complete before handoff.
+- Qt download/install threads remain responsive, failures keep the dialog and app open, cancellation blocks premature retry, and closing waits for owned workers. A native helper-ready handshake prevents exiting before installer startup succeeds.
+- Download interruption retries once; API throttling falls back to stable public release metadata. Validated per-install prepared caches are reused. Native helpers serialize per installation with a named mutex.
+- Fixed malformed settings startup and retained invalid originals; unplugged backup locations are retained; same-state duplicate app launches are blocked.
+- Fixed configured SQLite-home reads, failed RPC initialization process leaks, malformed bundle validation and user files sharing bundle metadata names.
+- Partial export-cleanup can restore missing chats/files while retaining surviving chats and changed files. Authoritative paginated project/list and native thread/read handle stale desktop mappings and lost project/chat registration responses.
+- Independent reviewer found no remaining blocking finding within the reviewed source and focused real-server/Qt test scope.
+- Final full suite: 92 passed, 61.46 s, zero skipped. Complete isolated fixture acceptance passed again; actual user A/B folders and chats were not moved or deleted.
+- Final packaged v0.2.1 updater passed two native swaps, readiness acknowledgments, version/path/PID startup health, settings retention and unknown-file preservation. The archived v0.2.0 production updater/helper also installed the new package successfully.
+- A private frozen Qt driver exercised the production update button against the final ZIP: one click, 16 ms click return, 0.899 s to parent exit after helper readiness, 21.306 s to healthy replacement on this computer. Timing is measured environment behavior, not a universal duration guarantee.
+- Actual account continuation, physical second-PC and mobile checks remain pending; fixture results do not certify those environments.

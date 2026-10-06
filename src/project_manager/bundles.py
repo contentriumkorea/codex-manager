@@ -19,9 +19,28 @@ def write_json(path, value):
 
 def load_manifest(bundle):
     m=json.loads((bundle/'manifest.json').read_text(encoding='utf-8'))
-    if m.get('format_version')!=1: raise ValueError('지원하지 않는 백업 형식입니다.')
-    if m.get('state')!='complete': raise ValueError('완성되지 않은 백업입니다.')
-    uuid.UUID(m['bundle_id'])
+    try:
+        if not isinstance(m,dict) or m.get('format_version')!=1: raise ValueError('지원하지 않는 백업 형식입니다.')
+        if m.get('state')!='complete': raise ValueError('완성되지 않은 백업입니다.')
+        uuid.UUID(m['bundle_id'])
+        project=m['project']
+        if not isinstance(project,dict) or not isinstance(project['id'],str) or not isinstance(project['name'],str) or not isinstance(project['roots'],list): raise ValueError('프로젝트 정보가 올바르지 않습니다.')
+        for key in ('roots','conversations','inventory'):
+            if not isinstance(m[key],list) or not all(isinstance(x,dict) for x in m[key]): raise ValueError('백업 목록 형식이 올바르지 않습니다.')
+        if not isinstance(m['dependencies'],list) or not isinstance(m['directories'],list): raise ValueError('백업 의존성·폴더 목록이 올바르지 않습니다.')
+        for root in m['roots']:
+            for key in ('id','original_path','bundle_path'):
+                if not isinstance(root[key],str): raise ValueError('백업 폴더 경로가 올바르지 않습니다.')
+        for t in m['conversations']:
+            uuid.UUID(t['id'])
+            for key in ('rollout','cwd','title'):
+                if not isinstance(t[key],str): raise ValueError('대화 정보가 올바르지 않습니다.')
+            if not isinstance(t['runtime_roots'],list): raise ValueError('대화의 작업 폴더 정보가 올바르지 않습니다.')
+        for entry in m['inventory']:
+            for key in ('root_id','relative_path','sha256','size'): entry[key]
+        for directory in m['directories']:
+            if not isinstance(directory,list) or len(directory)!=2: raise ValueError('폴더 목록 형식이 올바르지 않습니다.')
+    except (KeyError,TypeError,AttributeError) as exc: raise ValueError('백업 매니페스트의 필수 정보가 잘못됐습니다.') from exc
     return m
 
 
@@ -85,7 +104,7 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
     for folder,_,names in os.walk(destination):
         for name in names:
             p=Path(folder)/name
-            if p.name in ('checksums.jsonl','verification.json'): continue
+            if p.parent==destination and p.name in ('checksums.jsonl','verification.json'): continue
             checksum.append({'path':p.relative_to(destination).as_posix(),'size':p.stat().st_size,'sha256':digest(p)})
     with (destination/'checksums.jsonl').open('x',encoding='utf-8') as f:
         for entry in checksum: f.write(json.dumps(entry,ensure_ascii=False)+'\n')

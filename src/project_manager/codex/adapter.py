@@ -21,8 +21,9 @@ def desktop_running():
     if os.name!='nt': return False
     script="@(Get-CimInstance Win32_Process -Filter \"Name='codex.exe'\" | Where-Object { $_.CommandLine -match 'app-server' -and $_.CommandLine -notmatch '--listen' }).Count"
     try:
+        env=os.environ.copy();env['PSModulePath']=str(Path(env.get('SystemRoot','C:/Windows'))/'System32/WindowsPowerShell/v1.0/Modules')
         r=subprocess.run(['powershell','-NoProfile','-Command',script],capture_output=True,text=True,
-                         timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
+                         env=env,timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
         return r.returncode!=0 or int(r.stdout.strip())>0
     except (OSError,ValueError,subprocess.TimeoutExpired): return True
 
@@ -34,7 +35,7 @@ class CodexAdapter:
         if isolated and self.home==Path(os.environ.get('CODEX_HOME',str(Path.home()/'.codex'))).resolve():
             raise ValueError('격리 테스트 경로가 실제 Codex 저장소와 같습니다.')
 
-    def snapshot(self, include_runtime=True): return read_catalog(self.home,include_runtime)
+    def snapshot(self, include_runtime=True): return read_catalog(self.home,include_runtime,self.home if self.isolated else None)
 
     def ensure_write_allowed(self):
         if not self.isolated and desktop_running():
@@ -72,6 +73,16 @@ class CodexAdapter:
 
     def create_project(self, name, roots, key):
         return self.call('project/create',{'idempotencyKey':key,'name':name,'roots':[{'path':str(p.resolve())} for p in roots]})['project']['id']
+
+    def project_exists(self,pid):
+        params={};seen=set()
+        while True:
+            result=self.call('project/list',params)
+            if any(p['id']==pid for p in result['data']): return True
+            cursor=result.get('nextCursor')
+            if not cursor: return False
+            if cursor in seen: raise ValueError('프로젝트 목록 페이지를 확인할 수 없습니다.')
+            seen.add(cursor);params={'cursor':cursor}
 
     def read_thread(self, tid, turns=False):
         return self.call('thread/read',{'threadId':tid,'includeTurns':turns})['thread']

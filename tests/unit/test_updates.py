@@ -1,7 +1,7 @@
 import hashlib,json,zipfile
 from pathlib import Path
 import pytest
-from project_manager.updates import parse_release,stage_update,validate_install_plan
+from project_manager.updates import parse_release,stage_update,validate_install_plan,download_and_stage,check_release,store_prepared,load_prepared
 
 
 def release(version='0.3.0'):
@@ -72,3 +72,49 @@ def test_state_link_rejected_before_staging(tmp_path,monkeypatch):
     monkeypatch.setattr('project_manager.updates.linked',lambda p:p==state)
     with pytest.raises(ValueError): stage_update(archive,manifest,parse_release(release(),'0.2.0'),install,state)
     assert not list(tmp_path.glob('.codex-manager-update-*'))
+
+
+def test_api_rate_limit_uses_public_release_assets(monkeypatch):
+    from urllib.error import HTTPError
+    seen=[]
+    def read(url):
+        seen.append(url)
+        if 'api.github.com' in url: raise HTTPError(url,403,'rate limited',{},None)
+        return {'version':'0.3.0','asset':'Codex-Manager-Windows-x64.zip'}
+    monkeypatch.setattr('project_manager.updates.read_json_url',read)
+    result=check_release('0.2.1')
+    assert result.available and result.version=='0.3.0'
+    assert seen[1].endswith('/releases/latest/download/update.json')
+
+
+def test_truncated_download_is_retried_and_validated(tmp_path,monkeypatch):
+    import io
+    archive,metadata=package(tmp_path);payload=archive.read_bytes();calls=[]
+    install=tmp_path/'app';install.mkdir();(install/'CodexManager.exe').write_bytes(b'old')
+    monkeypatch.setattr('project_manager.updates.read_json_url',lambda u:metadata)
+    def open_url(url): calls.append(url);return io.BytesIO(payload[:10] if len(calls)==1 else payload)
+    monkeypatch.setattr('project_manager.updates.open_url',open_url)
+    plan=download_and_stage(parse_release(release(),'0.2.1'),install,tmp_path/'state')
+    assert len(calls)==2 and Path(plan['staged']).exists()
+    assert not list(tmp_path.glob('.codex-manager-download-*'))
+
+
+def test_cancelled_download_keeps_old_app_and_removes_download(tmp_path,monkeypatch):
+    import io
+    archive,metadata=package(tmp_path);install=tmp_path/'app';install.mkdir();(install/'CodexManager.exe').write_bytes(b'old')
+    monkeypatch.setattr('project_manager.updates.read_json_url',lambda u:metadata)
+    monkeypatch.setattr('project_manager.updates.open_url',lambda u:io.BytesIO(archive.read_bytes()))
+    cancelled=[False]
+    with pytest.raises(ValueError):
+        download_and_stage(parse_release(release(),'0.2.1'),install,tmp_path/'state',progress=lambda *a:cancelled.__setitem__(0,True),cancelled=lambda:cancelled[0])
+    assert (install/'CodexManager.exe').read_bytes()==b'old'
+    assert not list(tmp_path.glob('.codex-manager-download-*'))
+
+
+def test_prepared_cache_is_reusable_and_rejects_changed_file(tmp_path):
+    archive,metadata=package(tmp_path);install=tmp_path/'app';install.mkdir();(install/'CodexManager.exe').write_bytes(b'old')
+    release_info=parse_release(release(),'0.2.1');state=tmp_path/'state'
+    plan=stage_update(archive,metadata,release_info,install,state);store_prepared(plan)
+    assert load_prepared(release_info,install,state)
+    (Path(plan['staged'])/'CodexManager.exe').write_bytes(b'tampered')
+    assert load_prepared(release_info,install,state) is None

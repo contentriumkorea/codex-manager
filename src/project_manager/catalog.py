@@ -16,7 +16,26 @@ def clean_path(value):
 
 def load_state(home):
     path=home/'.codex-global-state.json'
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    value=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    if not isinstance(value,dict): raise ValueError('Codex 프로젝트 설정 파일 형식이 올바르지 않습니다.')
+    return value
+
+
+def sqlite_directory(home):
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    config=home/'config.toml'
+    if not config.exists(): return home
+    try:
+        with config.open('rb') as stream: value=tomllib.load(stream).get('sqlite_home')
+    except ValueError as exc: raise ValueError('Codex config.toml을 읽을 수 없습니다: '+str(exc)) from exc
+    if value is None: return home
+    if not isinstance(value,str): raise ValueError('Codex sqlite_home 설정이 경로 문자열이 아닙니다.')
+    path=Path(value).expanduser()
+    if not path.is_absolute(): raise ValueError('sqlite_home이 상대 경로입니다. Codex 설정에서 절대 경로로 지정하세요.')
+    return path
 
 
 _runtime_cache={}
@@ -57,11 +76,11 @@ def active_runtime_roots(path):
     return result
 
 
-def read_catalog(home: Path, include_runtime=True) -> Snapshot:
+def read_catalog(home: Path, include_runtime=True,sqlite_home=None) -> Snapshot:
     state=load_state(home)
     mappings=state.get('app-server-project-id-by-legacy-project-id-by-host',{}).get('local:'+str(home),{})
     projects={};conversations=[]
-    databases=sorted(home.glob('state_*.sqlite'), key=lambda p:int(p.stem.split('_')[-1]), reverse=True)
+    databases=sorted((sqlite_home or sqlite_directory(home)).glob('state_*.sqlite'), key=lambda p:int(p.stem.split('_')[-1]), reverse=True)
     db=None
     if databases:
         source=sqlite3.connect(databases[0].as_uri()+'?mode=ro',uri=True)

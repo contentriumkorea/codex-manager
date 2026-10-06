@@ -52,11 +52,13 @@ def cleanup_export(project,bundle,adapter,journal):
         if p.id!=project.id and any(r.resolve().is_relative_to(s.resolve()) or s.resolve().is_relative_to(r.resolve()) for r in p.roots for s in sources.values()):
             raise ValueError(f'다른 프로젝트와 폴더를 공유합니다: {p.name}')
     operation_id=uuid.uuid4().hex
-    journal.begin(operation_id,{'kind':'export-cleanup','home':str(adapter.home),'resources':[project.id],'bundle':str(bundle),'source':project.id})
+    journal.begin(operation_id,{'kind':'export-cleanup','home':str(adapter.home),'resources':[project.id],'bundle':str(bundle),'source':project.id,
+                                'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'project':asdict(actual_project)})
     try:
         journal.record(operation_id,'cleaning',{})
         child_ids={t.id for t in snapshot.conversations if t.id in tids and t.parent_id in tids}
-        for tid in sorted(tids-child_ids): adapter.delete_thread(tid)
+        for tid in sorted(tids-child_ids):
+            journal.record(operation_id,'deleting',{'thread_id':tid});adapter.delete_thread(tid)
         after=adapter.snapshot()
         if any(t.id in tids for t in after.conversations): raise ValueError('일부 대화가 아직 남아 있습니다.')
         check=remove_verified_files(inv,sources,backup_roots)

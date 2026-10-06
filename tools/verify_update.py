@@ -23,7 +23,9 @@ def verify(release_dir,root):
     plan=stage_update(release_dir/ASSET_NAME,metadata,release,app,state,parent_pid=2147483647)
     # Exercise the production launcher, including trusted helper copy and cwd.
     sys.frozen=True
+    started=time.monotonic()
     launch_installer(plan)
+    ready_seconds=time.monotonic()-started
     result=Path(plan['result']);deadline=time.monotonic()+90
     while not result.exists() and time.monotonic()<deadline: time.sleep(.25)
     if not result.exists(): raise RuntimeError('Installer did not finish.')
@@ -38,7 +40,7 @@ def verify(release_dir,root):
         assert not (backup/'CodexManager.exe').exists()
         assert json.loads((state/'settings.json').read_text(encoding='utf-8'))==settings
         assert list((state/'updates').glob('recover-*.cmd'))
-        print(json.dumps({'state':'passed','version':VERSION,'root':str(root),'health':health,'result':record}))
+        print(json.dumps({'state':'passed','version':VERSION,'root':str(root),'ready_seconds':round(ready_seconds,3),'total_seconds':round(time.monotonic()-started,3),'health':health,'result':record}))
     finally:
         # This PID belongs to the verified fresh application under this owned root.
         import ctypes

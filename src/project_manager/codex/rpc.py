@@ -4,6 +4,7 @@ import queue
 import subprocess
 import threading
 from pathlib import Path
+from ..version import VERSION
 
 
 class RpcError(RuntimeError):
@@ -25,11 +26,14 @@ class CodexClient:
             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
             env=self.env, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         threading.Thread(target=self._read, daemon=True).start()
-        if self.initialize:
-            self.call('initialize', {'clientInfo': {'name': 'project_conversation_manager', 'version': '0.1.0'},
-                                    'capabilities': {'experimentalApi': True}})
-            self.process.stdin.write(json.dumps({'method': 'initialized'}) + '\n')
-            self.process.stdin.flush()
+        try:
+            if self.initialize:
+                self.call('initialize', {'clientInfo': {'name': 'codex_manager', 'version': VERSION},
+                                        'capabilities': {'experimentalApi': True}})
+                self.process.stdin.write(json.dumps({'method': 'initialized'}) + '\n')
+                self.process.stdin.flush()
+        except BaseException:
+            self.__exit__();raise
         return self
 
     def _read(self):
