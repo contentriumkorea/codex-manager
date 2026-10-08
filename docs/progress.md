@@ -70,3 +70,11 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Final production package updater passed helper readiness, swap, version/path/PID startup health, settings retention and preservation of unknown user files.
 - A private frozen driver exercised the production Qt install button against the final ZIP: one click, 15 ms click return, 0.854 seconds to parent exit and 10.772 seconds to healthy v0.2.2 on this computer. Public asset verification and post-publication acceptance are recorded separately in the release evidence.
 - No original user project/chat was moved, linked or deleted for these checks. Actual account continuation, physical second-PC and mobile checks remain pending.
+
+2026-10-08 Codex Manager v0.2.3 logo update:
+- Applied the user-approved monochrome folder/conversation PNG without regenerating it; SHA-256 7e5d2e9edcc9496b1634628848b3d59f4a696b7512361f689b96f12df2644625.
+- Generated a Windows ICO with seven PNG frames (16/24/32/48/64/128/256px), embedded it in the executable, and packaged PNG/ICO resources for Qt windows and setuptools distributions.
+- Set a version-independent Windows AppUserModelID. Source operation/chat logic is unchanged.
+- Final full suite: 121 passed in 55.91 seconds. Independent review found no Critical/Important blocker in the inspected icon/startup/packaging scope.
+- Inspected the final PE: all seven embedded RT_ICON resources match the ICO frame payloads. Queried the actual native window icon through WM_GETICON and compared its opaque pixels with the approved 32px Qt icon: pass.
+- Final package updater passed helper readiness, replacement, v0.2.3 version/path/PID health, existing settings retention and preservation of unknown user files. Public release and installed-user shortcut checks are recorded in local release evidence.

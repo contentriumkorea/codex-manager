@@ -16,7 +16,7 @@ Windows용 로컬 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로
 .venv/Scripts/python.exe -m pytest tests -q
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
 .venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.2.2 --root .test-artifacts/update-verification
+.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.2.3 --root .test-artifacts/update-verification
 .venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
 ```
 

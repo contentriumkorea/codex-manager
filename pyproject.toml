@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-manager"
-version = "0.2.2"
+version = "0.2.3"
 requires-python = ">=3.10"
 dependencies = ["PySide6", "tomli>=2; python_version < '3.11'"]
 
@@ -14,3 +14,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+project_manager = ["ui/*.qss", "ui/*.png", "ui/*.ico", "install_update.ps1"]

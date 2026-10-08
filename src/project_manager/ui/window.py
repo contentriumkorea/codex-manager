@@ -4,7 +4,7 @@ import threading
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from PySide6.QtCore import Qt,QThread,Signal,QUrl,QTimer
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices,QIcon
 from PySide6.QtWidgets import (QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QLabel,QPushButton,
     QLineEdit,QListWidget,QListWidgetItem,QSplitter,QFileDialog,QMessageBox,QProgressDialog,
     QDialog,QPlainTextEdit,QInputDialog,QAbstractItemView,QFrame,QComboBox)
@@ -45,6 +45,7 @@ class Worker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self,adapter,state_dir,auto_refresh=True,start_update_check=True):
         super().__init__();self.adapter=adapter;self.state_dir=Path(state_dir)
+        self.setWindowIcon(QIcon(str(Path(__file__).parent/'app-icon.ico')))
         self.journal=Journal(self.state_dir/'journal.sqlite');self.snapshot=Snapshot((),(),'')
         self.mode='projects';self.workers=[];self.sizes={};self.backups=[];self.active_bundle=None
         self.size_scanner=SizeScanner(self);self._closing=False

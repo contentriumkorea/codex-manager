@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import QApplication,QMessageBox
 from PySide6.QtCore import QLockFile
+from PySide6.QtGui import QIcon
 from .codex.adapter import CodexAdapter
 from .ui.window import MainWindow
 from .version import APP_NAME,VERSION
@@ -24,7 +25,13 @@ def main():
         saved=read_settings(settings).get('home')
         if not isinstance(saved,str): saved=None
         args.home=Path(saved or os.environ.get('CODEX_HOME',str(Path.home()/'.codex')))
+    if sys.platform=='win32':
+        import ctypes
+        set_id=ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        set_id.argtypes=[ctypes.c_wchar_p];set_id.restype=ctypes.c_long
+        set_id('Contentrium.CodexManager')
     app=QApplication(sys.argv[:1]);app.setApplicationName(APP_NAME);app.setOrganizationName('Contentrium')
+    app.setWindowIcon(QIcon(str(Path(__file__).parent/'ui/app-icon.ico')))
     try:
         args.state_dir.mkdir(parents=True,exist_ok=True)
         instance=QLockFile(str(args.state_dir/'application.lock'));instance.setStaleLockTime(0)
