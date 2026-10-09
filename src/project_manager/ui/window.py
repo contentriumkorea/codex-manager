@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt,QThread,Signal,QUrl,QTimer
 from PySide6.QtGui import QDesktopServices,QIcon
 from PySide6.QtWidgets import (QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QLabel,QPushButton,
     QLineEdit,QListWidget,QListWidgetItem,QSplitter,QFileDialog,QMessageBox,QProgressDialog,
-    QDialog,QPlainTextEdit,QInputDialog,QAbstractItemView,QFrame,QComboBox)
+    QDialog,QPlainTextEdit,QInputDialog,QAbstractItemView,QFrame,QComboBox,QMenu,QApplication,QStyle)
 from ..models import Snapshot
 from ..catalog import clean_path
 from ..codex.adapter import CodexAdapter
@@ -68,49 +68,9 @@ class MainWindow(QMainWindow):
             except (ValueError,OSError): pass
         self.setWindowTitle(APP_NAME);self.resize(1260,810);self.setMinimumSize(950,630)
         self.setStyleSheet((Path(__file__).parent/'theme.qss').read_text(encoding='utf-8'))
-        base=QWidget();self.setCentralWidget(base);outer=QHBoxLayout(base);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
-        sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(205)
-        nav=QVBoxLayout(sidebar);nav.setContentsMargins(16,20,16,20)
-        brand=QLabel(APP_NAME);brand.setObjectName('brand');nav.addWidget(brand)
-        sub=QLabel('대화와 폴더를 함께');sub.setObjectName('muted');nav.addWidget(sub);nav.addSpacing(24)
-        self.nav_buttons=[]
-        for label,mode in [('프로젝트','projects'),('연결 안 된 대화','unassigned'),('백업 보관함','backups'),('진행·복구','recovery')]:
-            b=QPushButton(label);b.setObjectName('nav');b.setCheckable(True);b.clicked.connect(lambda _,m=mode:self.set_mode(m));nav.addWidget(b);self.nav_buttons.append((b,mode))
-        nav.addStretch();self.connection=QLabel('로컬 Codex');self.connection.setObjectName('muted');self.connection.setWordWrap(True);nav.addWidget(self.connection)
-        self.store_picker=QComboBox();self.store_picker.currentIndexChanged.connect(self.switch_store);nav.addWidget(self.store_picker)
-        settings=QPushButton('저장소 찾기');settings.clicked.connect(self.open_stores);nav.addWidget(settings)
-        self.update_button=QPushButton('업데이트');self.update_button.clicked.connect(lambda:self.open_updates());nav.addWidget(self.update_button)
-        version=QLabel('v'+VERSION+' · CONTENTRIUM');version.setObjectName('muted');nav.addWidget(version);outer.addWidget(sidebar)
-        content=QVBoxLayout();content.setContentsMargins(28,25,25,16);content.setSpacing(18);outer.addLayout(content,1)
-        top=QHBoxLayout();self.heading=QLabel('프로젝트');self.heading.setObjectName('heading');top.addWidget(self.heading);top.addStretch()
-        self.search=QLineEdit();self.search.setPlaceholderText('프로젝트·대화 검색');self.search.setMaximumWidth(270);self.search.textChanged.connect(self.filter_list);top.addWidget(self.search)
-        self.sort=QComboBox();self.sort.addItems(['용량 큰 순','이름 순','용량 작은 순']);self.sort.setMaximumWidth(130);self.sort.currentIndexChanged.connect(self.filter_list);top.addWidget(self.sort)
-        refresh=QPushButton('새로고침');refresh.clicked.connect(self.reload);top.addWidget(refresh)
-        add=QPushButton('백업 가져오기');add.setObjectName('primary');add.clicked.connect(self.open_backup);top.addWidget(add);content.addLayout(top)
-        self.subtitle=QLabel('프로젝트를 선택하면 연결된 대화와 폴더를 확인할 수 있습니다.');self.subtitle.setObjectName('muted');self.subtitle.setWordWrap(True);content.addWidget(self.subtitle)
-        actions=QHBoxLayout();self.buttons={}
-        for label,key,callback in [('옮기기','move',self.move),('합치기','merge',self.merge),('연결 관리','links',self.connections),('백업','backup',self.backup),('백업 후 정리','cleanup',self.export_cleanup)]:
-            b=QPushButton(label);b.clicked.connect(callback);actions.addWidget(b);self.buttons[key]=b
-        actions.addStretch();content.addLayout(actions)
-        self.move_button=self.buttons['move'];self.cleanup_button=self.buttons['cleanup']
-        split=QSplitter(Qt.Horizontal);content.addWidget(split,1)
-        self.project_list=QListWidget();self.project_list.setFrameShape(QFrame.NoFrame);self.project_list.currentItemChanged.connect(self.show_detail);split.addWidget(self.project_list)
-        detail=QWidget();detail_layout=QVBoxLayout(detail);detail_layout.setContentsMargins(23,0,0,0)
-        self.detail_title=QLabel('프로젝트 선택');self.detail_title.setStyleSheet('font-size: 18px; font-weight: 600;');detail_layout.addWidget(self.detail_title)
-        folder_title=QHBoxLayout();folder_title.addWidget(QLabel('연결 폴더'));folder_title.addStretch()
-        detail_layout.addLayout(folder_title)
-        self.folder_size=QLabel('');self.folder_size.setObjectName('muted');detail_layout.addWidget(self.folder_size)
-        self.folder_list=QListWidget();self.folder_list.setMaximumHeight(135);self.folder_list.itemDoubleClicked.connect(lambda item:QDesktopServices.openUrl(QUrl.fromLocalFile(item.data(Qt.UserRole))));detail_layout.addWidget(self.folder_list)
-        detail_layout.addWidget(QLabel('대화'));self.thread_list=QListWidget();self.thread_list.setSelectionMode(QAbstractItemView.ExtendedSelection);self.thread_list.itemDoubleClicked.connect(self.show_transcript);detail_layout.addWidget(self.thread_list,1)
-        self.detail_status=QLabel('');self.detail_status.setObjectName('muted');self.detail_status.setWordWrap(True);detail_layout.addWidget(self.detail_status)
-        self.bundle_action=QPushButton('선택한 백업 복원');self.bundle_action.clicked.connect(self.restore);self.bundle_action.hide();detail_layout.addWidget(self.bundle_action)
-        self.proof_action=QPushButton('복원 후 이어쓰기 확인');self.proof_action.clicked.connect(self.verify_restore);self.proof_action.hide();detail_layout.addWidget(self.proof_action)
-        self.recovery_action=QPushButton('복구 정보 보기');self.recovery_action.clicked.connect(self.show_recovery);self.recovery_action.hide();detail_layout.addWidget(self.recovery_action)
-        self.assign_action=QPushButton('프로젝트에 연결');self.assign_action.clicked.connect(self.assign_unassigned);self.assign_action.hide();detail_layout.addWidget(self.assign_action)
-        self.confirm_links=QPushButton('폴더 기준 대화 연결 확정');self.confirm_links.clicked.connect(self.connect_folder_threads);self.confirm_links.hide();detail_layout.addWidget(self.confirm_links)
-        split.addWidget(detail);split.setSizes([470,510])
-        self.size_status=QLabel('프로젝트 용량을 자동으로 확인합니다.');self.size_status.setObjectName('muted');content.addWidget(self.size_status)
-        self.footer=QLabel('원본 파일과 대화를 함께 관리합니다.');self.footer.setObjectName('muted');content.addWidget(self.footer)
+        from .layout import build_layout
+        self.browsing_project=None
+        build_layout(self)
         self.set_mode('projects')
         self.updater=UpdateManager(self);self.updater.handoff.connect(self.close)
         self.updater.changed.connect(self.sync_size_scan)
@@ -157,10 +117,64 @@ class MainWindow(QMainWindow):
         p=self.selected_project();return (p.id,) if p else ()
 
     def set_mode(self,mode):
+        self.browsing_project=None;self.browser_stack.setCurrentWidget(self.project_list)
         self.mode=mode
         for b,m in self.nav_buttons: b.setChecked(m==mode)
-        self.heading.setText({'projects':'프로젝트','unassigned':'연결 안 된 대화','backups':'백업 보관함','recovery':'진행·복구'}[mode])
+        self.heading.setText({'projects':'모든 프로젝트','unassigned':'분류할 대화','backups':'백업','recovery':'작업 복구'}[mode])
+        self.project_actions.setVisible(mode=='projects');self.sort.setVisible(mode=='projects');self.home_button.hide()
+        self.subtitle.setText({'projects':'프로젝트를 두 번 클릭해 파일을 살펴보세요. 파일과 대화가 함께 이동·백업됩니다.','unassigned':'프로젝트를 찾지 못한 대화입니다. 내용을 확인하고 원하는 프로젝트로 분류하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'중단된 작업을 확인하고 이전 상태로 복구할 수 있습니다.'}[mode])
+        self.project_list.clear()
         self.filter_list()
+
+    def show_projects(self):
+        if self.mode!='projects':self.set_mode('projects');return
+        self.browsing_project=None;self.browser_stack.setCurrentWidget(self.project_list);self.home_button.hide();self.heading.setText('모든 프로젝트');self.update_empty_state()
+
+    def navigate_back(self):
+        if self.browser_stack.currentWidget()==self.file_browser:self.file_browser.go_back()
+        elif self.mode!='projects':self.set_mode('projects')
+
+    def open_project(self):
+        p=self.selected_project()
+        if not p:return
+        self.browsing_project=p.id;self.file_browser.set_project(p);self.browser_stack.setCurrentWidget(self.file_browser)
+        self.home_button.show();self.heading.setText(p.name);self.empty_state.hide()
+
+    def open_selected(self,item,*_):
+        if self.mode=='projects':self.open_project()
+        elif self.mode=='unassigned':self.show_transcript(item)
+        elif self.mode=='backups':self.restore()
+        elif self.mode=='recovery':self.show_recovery()
+
+    def open_root(self,item):
+        p=self.selected_project()
+        if p:
+            self.open_project();self.file_browser.navigate(Path(item.data(Qt.UserRole)))
+
+    def project_context_menu(self,point):
+        item=self.project_list.itemAt(point)
+        if not item:return
+        self.project_list.setCurrentItem(item);menu=QMenu(self)
+        if self.mode=='projects':
+            for title,callback in [('열기',self.open_project),('옮기기…',self.move),('다른 프로젝트와 합치기…',self.merge),('백업 만들기…',self.backup),('프로젝트 설정…',self.connections)]:menu.addAction(title,callback)
+            project=self.selected_project()
+            if project and project.roots:menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(project.roots[0])))
+        elif self.mode=='backups':menu.addAction('이 백업 복원하기…',self.restore)
+        elif self.mode=='unassigned':
+            preview=QListWidgetItem(item.text());preview.setData(Qt.UserRole,item.data(Qt.UserRole))
+            menu.addAction('대화 읽기',lambda:self.show_transcript(preview));menu.addAction('프로젝트로 분류…',self.assign_unassigned)
+        else:menu.addAction('중단된 작업 복구…',self.show_recovery)
+        menu.exec(self.project_list.viewport().mapToGlobal(point))
+
+    def show_help(self):
+        QMessageBox.information(self,'Codex Manager 사용 안내','1. 프로젝트를 두 번 클릭하면 파일과 폴더가 열립니다.\n2. 오른쪽 대화를 두 번 클릭하면 내용을 읽을 수 있습니다.\n3. 프로젝트를 선택하고 옮기기·합치기·백업 만들기를 누르세요.\n\n외장하드에 보관하기\n백업 만들기 → 외장하드 선택. 파일과 대화를 함께 보관합니다.\n\n다른 컴퓨터로 가져오기\n백업 가져오기 → 백업 폴더 선택 → 이 백업 복원하기.\n\n원본 정리\n복원한 대화에서 실제로 이어 쓴 뒤 백업의 복원 상태를 확인하세요. 확인을 마치면 원래 프로젝트의 더 보기에서 원본을 정리할 수 있습니다.\n\n이동·합치기·복원은 Codex 앱을 종료한 상태에서 진행하세요.\nCtrl+F 검색 · F5 새로고침 · Alt+← 뒤로')
+
+    def update_empty_state(self):
+        empty=self.project_list.count()==0 and self.browser_stack.currentWidget()==self.project_list
+        self.empty_state.setVisible(empty)
+        if self.search.text():text='검색 결과가 없습니다. 다른 이름이나 폴더 경로를 검색해 보세요.'
+        else:text={'projects':'아직 프로젝트가 없습니다.\n다른 위치 찾기로 기존 Codex 데이터를 연결하거나 백업을 가져오세요.','unassigned':'분류할 대화가 없습니다.','backups':'아직 등록된 백업이 없습니다.\n프로젝트에서 백업 만들기를 누르거나 기존 백업을 가져오세요.','recovery':'복구가 필요한 작업이 없습니다.'}[self.mode]
+        self.empty_state.setText(text)
 
     def refresh(self,snapshot):
         self.snapshot=snapshot
@@ -173,34 +187,47 @@ class MainWindow(QMainWindow):
     def filter_list(self):
         query=self.search.text().lower();selected=self.project_list.currentItem()
         old=selected.data(Qt.UserRole) if selected else None
-        scroll=self.project_list.verticalScrollBar().value();self.project_list.clear()
+        scroll=self.project_list.verticalScrollBar().value();self.project_list.blockSignals(True);self.project_list.clear()
         if self.mode=='projects':
+            self.project_list.configure(['이름','폴더 위치','대화','용량'])
             projects=self.ordered_projects()
             for p in projects:
                 ts=self.project_threads(p.id)
-                if query and query not in p.name.lower() and not any(query in t.title.lower() for t in ts): continue
-                item=QListWidgetItem(self.project_label(p));item.setToolTip(self.size_tooltip(p.id))
-                item.setData(Qt.UserRole,p.id);self.project_list.addItem(item)
+                if query and query not in p.name.lower() and not any(query in str(r).lower() for r in p.roots) and not any(query in t.title.lower() for t in ts): continue
+                item=self.project_list.add_record([p.name,str(p.roots[0])+(f' 외 {len(p.roots)-1}곳' if len(p.roots)>1 else '') if p.roots else '폴더 없음',str(len(ts)),self.size_text(p.id)],p.id,self.style().standardIcon(QStyle.SP_DirIcon));item.setToolTip(3,self.size_tooltip(p.id))
                 if p.id==old: self.project_list.setCurrentItem(item)
         elif self.mode=='unassigned':
+            self.project_list.configure(['대화 이름','기록된 폴더'])
             for t in self.snapshot.conversations:
-                if self.membership.projects.get(t.id) is None and (not query or query in t.title.lower()):
+                if self.membership.projects.get(t.id) is None and (not query or query in (t.title+' '+str(t.cwd)).lower()):
                     item=QListWidgetItem(t.title+'\n'+str(t.cwd));item.setData(Qt.UserRole,t.id);self.project_list.addItem(item)
         elif self.mode=='backups':
+            self.project_list.configure(['프로젝트','백업 위치'])
             for bundle in self.backups:
                 try: m=load_manifest(bundle);name=m['project']['name']
                 except Exception: name='연결되지 않은 백업' if not bundle.exists() else '확인 필요한 백업'
-                item=QListWidgetItem(name+'\n'+str(bundle));item.setData(Qt.UserRole,str(bundle));self.project_list.addItem(item)
+                if query and query not in (name+' '+str(bundle)).lower():continue
+                item=QListWidgetItem(name+'\n'+str(bundle));item.setData(Qt.UserRole,str(bundle));added=self.project_list.addItem(item)
+                if str(bundle)==old:self.project_list.setCurrentItem(added)
         else:
+            self.project_list.configure(['작업','작업 번호'])
             for operation in self.journal.pending():
+                if query and query not in (operation['payload'].get('kind','작업')+' '+operation['id']).lower():continue
                 item=QListWidgetItem(operation['payload'].get('kind','작업')+' · '+operation['state']+'\n'+operation['id']);item.setData(Qt.UserRole,operation['id']);self.project_list.addItem(item)
-        self.project_list.verticalScrollBar().setValue(scroll);self.show_detail()
+        if old is not None and self.project_list.currentItem() is None:
+            for n in range(self.project_list.count()):
+                if self.project_list.item(n).data(Qt.UserRole)==old:self.project_list.setCurrentRow(n);break
+        self.project_list.blockSignals(False);self.project_list.verticalScrollBar().setValue(scroll);self.show_detail();self.update_empty_state()
 
     def show_detail(self,*_):
         self.folder_list.clear();self.thread_list.clear();self.detail_status.setText('');self.folder_size.setText('');self.confirm_links.hide();self.active_bundle=None
         self.bundle_action.setVisible(self.mode=='backups');self.proof_action.setVisible(self.mode=='backups');self.recovery_action.setVisible(self.mode=='recovery')
         self.assign_action.setVisible(self.mode=='unassigned')
         p=self.selected_project()
+        self.open_button.setEnabled(p is not None);self.more.setEnabled(p is not None)
+        self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False);self.assign_action.setEnabled(self.project_list.currentItem() is not None);self.recovery_action.setEnabled(self.project_list.currentItem() is not None)
+        if self.browsing_project and (not p or p.id!=self.browsing_project):self.show_projects()
+        if self.browsing_project and p:self.file_browser.set_project(p);self.heading.setText(p.name)
         for b in self.buttons.values(): b.setEnabled(p is not None)
         self.cleanup_button.setEnabled(False);self.cleanup_button.setToolTip('실제 계정의 복원 후 이어쓰기 검증 전에는 원본 정리를 사용하지 않습니다.')
         if p:
@@ -214,16 +241,17 @@ class MainWindow(QMainWindow):
                 item=QListWidgetItem(str(path)+('' if path.exists() else '\n폴더 없음'));item.setToolTip(str(path));item.setData(Qt.UserRole,str(path));self.folder_list.addItem(item)
             for t in self.snapshot.conversations:
                 if self.membership.projects.get(t.id)==p.id:
-                    label=t.title+('  ·  보관됨' if t.archived else '')+('  ·  폴더 기준' if t.id in self.membership.inferred else '')+'\n'+str(t.cwd)
+                    label=t.title+('  ·  보관됨' if t.archived else '')+('  ·  폴더 기준' if t.id in self.membership.inferred else '')
                     item=QListWidgetItem(label);item.setToolTip(str(t.cwd));item.setData(Qt.UserRole,t.id);self.thread_list.addItem(item)
-            self.detail_status.setText('대화를 두 번 클릭하면 내용을 볼 수 있습니다.\n폴더를 두 번 클릭하면 탐색기로 엽니다.')
+            self.detail_status.setText('대화를 두 번 클릭하면 내용을 읽을 수 있습니다.' if self.thread_list.count() else '이 프로젝트에 표시할 대화가 없습니다.')
             self.folder_size.setText(self.size_text(p.id));self.folder_size.setToolTip(self.size_tooltip(p.id))
             inferred=self.folder_threads(p.id)
             if inferred:
-                self.confirm_links.show();self.confirm_links.setText(f'폴더 기준 대화 {len(inferred)}개 연결 확정')
-                self.detail_status.setText('폴더가 일치하는 대화를 함께 표시합니다. 백업에 포함되며, 이동·정리 전에 연결을 확정하세요.')
+                self.confirm_links.show();self.confirm_links.setText(f'대화 {len(inferred)}개 연결 확인')
+                self.detail_status.setText('같은 폴더에서 작업한 대화도 함께 표시합니다. 이동·합치기를 누르면 필요한 연결을 안내합니다.')
         else:
-            self.detail_title.setText('항목 선택')
+            self.detail_title.setText('프로젝트를 선택하세요' if self.mode=='projects' else '항목을 선택하세요')
+            self.detail_status.setText('선택한 항목의 대화와 폴더가 여기에 표시됩니다.')
             item=self.project_list.currentItem()
             if item and self.mode=='unassigned':
                 tid=item.data(Qt.UserRole);t=next(t for t in self.snapshot.conversations if t.id==tid)
@@ -238,10 +266,11 @@ class MainWindow(QMainWindow):
                     for r in m['roots']: self.folder_list.addItem(r['original_path'])
                     for t in m['conversations']:
                         i=QListWidgetItem(t['title']);i.setData(Qt.UserRole,t['id']);self.thread_list.addItem(i)
-                    self.detail_status.setText('대화가 포함된 백업\n복원 전에 파일 무결성과 경로를 검사합니다.')
+                    self.detail_status.setText('① 이 백업 복원하기 → 새 폴더 선택\n② Codex에서 복원한 대화 이어쓰기\n③ 복원 상태 확인 → 원래 컴퓨터에서 원본 정리')
                 except Exception as exc:
                     self.detail_status.setText('백업을 연결하거나 파일 상태를 확인하세요.\n'+str(exc))
                     self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False)
+        self.detail_tabs.setTabText(0,f'대화 {self.thread_list.count()}');self.detail_tabs.setTabText(1,f'폴더 위치 {self.folder_list.count()}')
 
     def run_job(self,title,func,done=None):
         if self.updater.requested:
@@ -299,7 +328,7 @@ class MainWindow(QMainWindow):
         if p and self.mode=='projects':
             for n in range(self.project_list.count()):
                 item=self.project_list.item(n)
-                if item.data(Qt.UserRole)==pid:item.setText(self.project_label(p));item.setToolTip(self.size_tooltip(pid));break
+                if item.data(Qt.UserRole)==pid:item.setText(3,self.size_text(pid));item.setToolTip(3,self.size_tooltip(pid));break
         selected=self.selected_project()
         if selected and selected.id==pid:self.folder_size.setText(self.size_text(pid));self.folder_size.setToolTip(self.size_tooltip(pid))
         self.update_size_status()
@@ -322,7 +351,7 @@ class MainWindow(QMainWindow):
             label=home.name+' · '+home.parent.name+(' · 연결 안 됨' if not info.available else '')
             self.store_picker.addItem(label,str(home));self.store_picker.setItemData(self.store_picker.count()-1,str(home),Qt.ToolTipRole)
             if home==self.adapter.home:self.store_picker.setCurrentIndex(self.store_picker.count()-1)
-        self.store_picker.blockSignals(False);self.connection.setText(str(self.adapter.home))
+        self.store_picker.blockSignals(False);self.connection.setText(self.adapter.home.parent.name+' / '+self.adapter.home.name);self.connection.setToolTip(str(self.adapter.home))
         if self.store_dialog:self.store_dialog.refresh()
 
     def start_store_scan(self,extra=None):
@@ -389,13 +418,14 @@ class MainWindow(QMainWindow):
 
     def show_transcript(self,item):
         tid=item.data(Qt.UserRole)
+        title=item.text().split('\n')[0];bundle=self.active_bundle
+        thread=next((t for t in self.snapshot.conversations if t.id==tid),None)
         def read(w):
-            if self.active_bundle: return read_transcript(self.active_bundle,tid)
-            t=next(t for t in self.snapshot.conversations if t.id==tid)
-            if not t.rollout: raise ValueError('대화 기록 경로가 없습니다.')
-            return list(transcript(t.rollout))
+            if bundle: return read_transcript(bundle,tid)
+            if not thread or not thread.rollout: raise ValueError('대화 기록 경로가 없습니다.')
+            return list(transcript(thread.rollout))
         def show(messages):
-            d=QDialog(self);d.setWindowTitle(item.text().split('\n')[0]);d.resize(790,650)
+            d=QDialog(self);d.setWindowTitle(title);d.resize(790,650)
             layout=QVBoxLayout(d);text=QPlainTextEdit();text.setReadOnly(True)
             text.setPlainText('\n\n'.join(('나' if m['role']=='user' else 'Codex')+'\n'+m['text'] for m in messages));layout.addWidget(text);d.exec()
         self.run_job('대화 읽기',read,show)
@@ -411,7 +441,12 @@ class MainWindow(QMainWindow):
         ts=self.project_threads(p.id)
         if not confirm(self,'프로젝트 백업',f'{p.name}\n\n대화 {len(ts)}개와 폴더 {len(p.roots)}개를 함께 복사합니다.\n\n백업 위치\n{destination}\n\n원본은 유지합니다.'): return
         def done(result):
-            self.backups.append(destination);self.save_settings();self.footer.setText('백업 저장: '+str(destination));self.show_result(result)
+            if not result.ok:QMessageBox.warning(self,'백업 확인','\n'.join(result.errors));return
+            self.backups.append(destination);self.save_settings();self.search.clear();self.set_mode('backups')
+            for n in range(self.project_list.count()):
+                if self.project_list.item(n).data(Qt.UserRole)==str(destination):self.project_list.setCurrentRow(n);break
+            self.footer.setText('백업 완료 · '+str(destination))
+            if not self.updater.requested:QMessageBox.information(self,'백업 완료','파일과 대화를 함께 백업했습니다.\n\n저장 위치\n'+str(destination)+'\n\n왼쪽 백업 메뉴에서 다시 열 수 있습니다.')
         def export(w):
             snapshot=self.adapter.snapshot()
             membership=display_membership(snapshot,read_settings(self.adapter.home/'.codex-global-state.json'))
@@ -424,7 +459,7 @@ class MainWindow(QMainWindow):
 
     def move(self):
         p=self.selected_project()
-        if not p or not self.require_linked(p) or not self.guard_change(): return
+        if not p or not self.guard_change(): return
         parent=QFileDialog.getExistingDirectory(self,'프로젝트를 옮길 상위 폴더')
         if not parent: return
         safe=re.sub(r'[<>:"/\\|?*]','_',p.name).strip('. ') or 'project'
@@ -433,7 +468,7 @@ class MainWindow(QMainWindow):
 
     def merge(self):
         p=self.selected_project()
-        if not p or not self.require_linked(p) or not self.guard_change(): return
+        if not p or not self.guard_change(): return
         others=[q for q in self.snapshot.projects if q.id!=p.id and q.roots]
         if not others: QMessageBox.information(self,'합치기','합칠 대상 프로젝트가 없습니다.');return
         labels=[q.name+' · '+str(q.roots[0]) for q in others]
@@ -448,10 +483,13 @@ class MainWindow(QMainWindow):
         text=p.name+(' → '+target.name if target else '')+'\n\n'
         text+='\n\n'.join(old+'\n→ '+str(new) for old,new in destinations.items())
         text+='\n\n대화의 소속과 현재 작업 경로를 함께 변경합니다.\n파일 복사와 연결을 다시 검증한 뒤 선택한 원본을 정리합니다.'
+        inferred=tuple(t.id for t in self.folder_threads(p.id))
+        if inferred:text+=f'\n\n같은 폴더에서 작업한 대화 {len(inferred)}개를 이 프로젝트에 연결한 다음 진행합니다.'
         clean=confirm_transfer(self,'합치기' if target else '옮기기',text)
         if clean is None: return
         recovery=(target.roots[0].parent if target else next(iter(destinations.values())).parent)/'.project-manager-recovery'
-        self.run_job('파일과 대화 연결 변경',lambda w:transfer_project(self.adapter,p,destinations,self.journal,recovery,target,clean,w.progress.emit,w.cancelled.is_set),self.show_result)
+        from .flows import transfer_with_connections
+        self.run_job('프로젝트를 옮기는 중' if not target else '프로젝트를 합치는 중',lambda w:transfer_with_connections(self.adapter,p,destinations,self.journal,recovery,target,clean,inferred,w.progress.emit,w.cancelled.is_set),self.show_result)
 
     def connections(self):
         p=self.selected_project()
@@ -478,14 +516,16 @@ class MainWindow(QMainWindow):
         self.run_job('백업을 확인하고 원본 정리',lambda w:cleanup_export(p,bundle,self.adapter,self.journal),self.show_result)
 
     def open_backup(self):
-        folder=QFileDialog.getExistingDirectory(self,'manifest.json이 있는 백업 폴더')
+        folder=QFileDialog.getExistingDirectory(self,'Codex Manager로 만든 백업 폴더 선택')
         if not folder: return
         bundle=Path(folder)
         def done(check):
             if not check.ok: QMessageBox.warning(self,'백업 검증','\n'.join(check.errors));return
             if bundle not in self.backups: self.backups.append(bundle)
             self.save_settings()
-            self.set_mode('backups');self.project_list.setCurrentRow(self.backups.index(bundle))
+            self.search.clear();self.set_mode('backups')
+            for n in range(self.project_list.count()):
+                if self.project_list.item(n).data(Qt.UserRole)==str(bundle):self.project_list.setCurrentRow(n);break
         self.run_job('백업 파일 검증',lambda w:verify_bundle(bundle),done)
 
     def restore(self):
@@ -539,12 +579,13 @@ class MainWindow(QMainWindow):
     def assign_unassigned(self):
         item=self.project_list.currentItem()
         if not item or not self.guard_change(): return
+        tid=item.data(Qt.UserRole)
         projects=list(self.snapshot.projects)
         if not projects: return
         labels=[p.name+' · '+p.id[:8] for p in projects]
         label,ok=QInputDialog.getItem(self,'대화 연결','대상 프로젝트',labels,0,False)
         if not ok: return
-        p=projects[labels.index(label)];tid=item.data(Qt.UserRole)
+        p=projects[labels.index(label)]
         self.run_job('대화 연결',lambda w:change_connections(self.adapter,p,{tid:p.id},self.journal),self.show_result)
 
     def choose_home(self):

@@ -78,3 +78,14 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Final full suite: 121 passed in 55.91 seconds. Independent review found no Critical/Important blocker in the inspected icon/startup/packaging scope.
 - Inspected the final PE: all seven embedded RT_ICON resources match the ICO frame payloads. Queried the actual native window icon through WM_GETICON and compared its opaque pixels with the approved 32px Qt icon: pass.
 - Final package updater passed helper readiness, replacement, v0.2.3 version/path/PID health, existing settings retention and preservation of unknown user files. Public release and installed-user shortcut checks are recorded in local release evidence.
+
+2026-10-09 Codex Manager v0.3.0 file-manager UX:
+- Replaced the stacked project cards with Name/Folder/Chats/Size columns, project open/double-click actions, context menus and location search. Added a read-only asynchronous file browser with back/up/path entry/multiple roots, plus a persistent conversation/folder detail pane.
+- Moved less common project settings and verified source cleanup into More. Folder selection in project settings uses a picker; clear empty states, keyboard shortcuts and an in-app guide explain common workflows.
+- Confirmed move/merge previews now include inferred conversations and attach them before continuing. Fresh membership/project changes reject stale prompts; failure or cancellation does not proceed into transfer. Existing source deletion checks and unchecked-by-default cleanup remain.
+- Backup success selects the saved backup and exposes Restore immediately. Existing backups can be searched by name/path. Source/backup data is unchanged by browsing.
+- Fixed two reviewer-reproduced deleted-Qt-item failures when background size completion refreshed the list during conversation reading or the assignment picker. Capture immutable operation inputs and preserve selection in every mode.
+- Final full suite: 130 passed in 63.75 seconds. Isolated merge/backup/import/continuation-proof/cleanup acceptance passed. Independent review and its original regression reproductions passed.
+- Reviewed source screenshots at 1420x860 and 1060x680, including file browsing and empty states. Final packaged executable rendered the project table/detail pane and retained the approved logo.
+- Final packaged updater passed native replacement, v0.3.0 startup health, settings retention and unknown-file preservation. Public verification and local installation evidence are kept under .test-artifacts.
+- Actual user files/chats were not moved or deleted for testing. Physical second-PC and mobile continuation remain unverified.

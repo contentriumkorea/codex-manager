@@ -1,6 +1,6 @@
 # Codex Manager
 
-Windows용 로컬 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로 이동, 합치기, 연결 관리, 대화 포함 백업과 새 경로 복원을 제공합니다.
+파일 탐색기처럼 사용하는 Windows용 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로 이동, 합치기, 연결 관리, 대화 포함 백업과 새 경로 복원을 제공합니다.
 
 전체 프로젝트 용량을 자동 계산해 큰 순으로 표시합니다. 명시적 소속이 없는 옛 대화는 폴더·부모 관계로 분류하고, 여러 Codex 저장소를 자동 검색·등록해 전환할 수 있습니다. 폴더 기준 분류는 원본 소속과 구분하고, 변경·정리 전에 연결을 확정합니다.
 
@@ -16,7 +16,7 @@ Windows용 로컬 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로
 .venv/Scripts/python.exe -m pytest tests -q
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
 .venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.2.3 --root .test-artifacts/update-verification
+.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.3.0 --root .test-artifacts/update-verification
 .venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
 ```
 

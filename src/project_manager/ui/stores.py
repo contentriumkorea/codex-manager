@@ -5,9 +5,9 @@ from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QListWidget
 
 class StoresDialog(QDialog):
     def __init__(self,window):
-        super().__init__(window);self.window=window;self.setWindowTitle('Codex 저장소 관리');self.resize(760,460)
+        super().__init__(window);self.window=window;self.setWindowTitle('Codex 데이터 위치');self.resize(800,500)
         layout=QVBoxLayout(self)
-        note=QLabel('이 컴퓨터의 여러 Codex 저장소를 찾아 등록합니다.\n목록에서 저장소를 전환하면 각각의 프로젝트와 대화를 볼 수 있습니다.');note.setWordWrap(True);layout.addWidget(note)
+        note=QLabel('프로젝트나 대화가 보이지 않나요?\n예전에 사용한 Codex 데이터 위치를 찾아보세요. 위치를 선택하면 그곳에 저장된 프로젝트와 대화가 표시됩니다.');note.setWordWrap(True);layout.addWidget(note)
         self.list=QListWidget();layout.addWidget(self.list,1)
         self.status=QLabel('기본 경로·이전에 등록한 위치·로컬 드라이브를 검색합니다.');self.status.setWordWrap(True);layout.addWidget(self.status)
         row=QHBoxLayout();layout.addLayout(row)
