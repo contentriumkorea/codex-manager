@@ -61,6 +61,33 @@ def rename_thread(adapter,thread,name,journal):
         return OperationResult('needs_recovery','파일 유지','제목 변경 확인 필요','대화 기록 유지',errors=(str(exc),))
 
 
+def title_changes(names,find='',replacement='',prefix='',suffix=''):
+    return tuple(valid_name(prefix+(name.replace(find,replacement) if find else name)+suffix) for name in names)
+
+
+def rename_threads(adapter,threads,names,journal):
+    adapter.ensure_write_allowed()
+    if len(threads)!=len(names) or not threads or len({t.id for t in threads})!=len(threads):
+        raise ValueError('변경할 대화와 제목 목록을 다시 확인하세요.')
+    names=tuple(valid_name(name) for name in names)
+    fresh_threads(adapter,threads)
+    changes=[{'id':t.id,'old_name':t.title,'new_name':name} for t,name in zip(threads,names) if t.title!=name]
+    if not changes:return OperationResult('completed','파일 유지','변경된 제목 없음','대화 기록 유지')
+    op=uuid.uuid4().hex
+    journal.begin(op,{'kind':'rename-threads','home':str(adapter.home),'changes':changes,
+                      'label':f'대화 {len(changes)}개 제목 변경',
+                      'resources':list({'thread:'+t.id for t in threads}|{t.project_id for t in threads if t.project_id})})
+    try:
+        for change in changes:
+            journal.record(op,'renaming',{'thread_id':change['id']})
+            set_thread_name(adapter,change['id'],change['new_name'])
+        journal.record(op,'completed',{})
+        return OperationResult('completed','파일 유지',f'대화 {len(changes)}개 제목 변경 완료','작업 복구에서 이전 제목으로 되돌릴 수 있습니다.')
+    except Exception as exc:
+        journal.record(op,'needs_recovery',{'error':str(exc)})
+        return OperationResult('needs_recovery','파일 유지','제목 변경 일부 완료','작업 복구에서 이전 제목으로 되돌리세요.',errors=(str(exc),))
+
+
 def move_threads(adapter,threads,target_id,journal):
     adapter.ensure_write_allowed();snapshot=fresh_threads(adapter,threads)
     target=next((p for p in snapshot.projects if p.id==target_id),None)
@@ -175,7 +202,14 @@ def recover_management(operation,adapter,journal):
     if Path(payload['home']).resolve()!=adapter.home.resolve():raise ValueError('작업을 시작한 Codex 저장소를 선택하세요.')
     if any(e['payload'].get('recovered') for e in journal.events(op)):
         return OperationResult('completed','복구 확인 완료','이미 복구한 작업입니다.','파일 유지')
-    if payload['kind']=='rename-thread':
+    if payload['kind']=='rename-threads':
+        current={t.id:t for t in adapter.snapshot().conversations}
+        changes=payload['changes']
+        if any(c['id'] not in current or current[c['id']].running or current[c['id']].title not in (c['old_name'],c['new_name']) for c in changes):
+            raise ValueError('대화가 삭제되었거나 제목이 이후에 바뀌었습니다. 현재 제목은 덮어쓰지 않습니다.')
+        for c in changes:
+            if current[c['id']].title!=c['old_name']:set_thread_name(adapter,c['id'],c['old_name'])
+    elif payload['kind']=='rename-thread':
         current=next(t for t in adapter.snapshot().conversations if t.id==payload['thread_id'])
         if current.title not in (payload['old_name'],payload['new_name']):raise ValueError('대화 제목이 이후에 바뀌었습니다.')
         set_thread_name(adapter,current.id,payload['old_name'])

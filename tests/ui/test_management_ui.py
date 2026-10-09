@@ -23,8 +23,9 @@ def test_rename_captures_identity_before_modal_refresh(qtbot,tmp_path,monkeypatc
     p=Project('p','P',(tmp_path/'missing',));t=Conversation('t','p',tmp_path,(),False,None,'',False,'원래 제목')
     w.refresh(Snapshot((p,),(t,),''));w.project_list.setCurrentRow(0);w.thread_list.item(0).setSelected(True)
     monkeypatch.setattr(w,'guard_change',lambda:True)
-    def enter(*args,**kwargs):w.filter_list();return '새 제목',True
-    monkeypatch.setattr('project_manager.ui.management.QInputDialog.getText',enter)
+    def enter(dialog):
+        w.filter_list();dialog.name.setText('새 제목');return 1
+    monkeypatch.setattr('project_manager.ui.management.RenameDialog.exec',enter)
     jobs=[];monkeypatch.setattr(w,'run_job',lambda title,work,done:jobs.append(work))
     w.rename_selected_thread();assert len(jobs)==1
     # Exercise the callback after native list items have been replaced.

@@ -116,3 +116,13 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Read-only local diagnosis resolved 18 stale-folder conflicts without modifying Codex state.
 - 152 tests passed; isolated merge/import/restore workflow passed; packaged update startup verified.
 - Physical second-PC and mobile synchronization were not exercised.
+
+
+2026-10-09 Codex Manager v0.6.0 usability:
+- All-conversations view with project/date/state columns, archive filters, search, sorting and per-section search memory.
+- Visible project/chat rename controls, F2/Delete actions, live preview and literal bulk title transforms.
+- Searchable project destination picker for membership moves and project merge.
+- Completed and interrupted title edits can be restored; batch validation rejects later edits before any undo write.
+- Central live-mode action guard preserves read-only backup browsing; selections remain stable through refresh and section changes.
+- Full suite: 165 passed; final compact layout UI suite: 44 passed. Independent review findings fixed; native screenshots checked at normal/minimum size.
+- Real user conversations were not mutated for testing. Mobile sync and a second physical PC remain outside verification.

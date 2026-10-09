@@ -219,7 +219,7 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundl
     adapter.ensure_write_allowed()
     operation=journal.operation(operation_id)
     if not operation: raise ValueError('복구할 작업을 찾을 수 없습니다.')
-    if operation['payload']['kind'] in ('management-delete','rename-thread'):
+    if operation['payload']['kind'] in ('management-delete','rename-thread','rename-threads'):
         from .management import recover_management
         return recover_management(operation,adapter,journal)
     if operation['state']=='completed': return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지')

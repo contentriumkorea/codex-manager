@@ -39,14 +39,14 @@ def test_delete_project_restores_from_verified_copy(tmp_path,files):
     assert not any(x.id==p.id for x in a.snapshot().projects)
     assert (p.roots[0]/'same.txt').exists()==(not files)
     assert a.read_thread(other)['projectId']==q.id
-    saved=j.restorable();assert len(saved)==1
+    saved=[op for op in j.restorable() if op['payload']['kind']=='management-delete'];assert len(saved)==1
     result=management.recover_management(saved[0],a,j)
     assert result.state=='completed',result.errors
     restored=next(t for t in a.snapshot().conversations if t.id==tid)
     assert restored.title=='보존할 제목'
     assert '테스트 A입니다' in str(a.read_thread(tid,True))
     assert (p.roots[0]/'same.txt').read_text()=='A'
-    assert not j.restorable() and not j.pending()
+    assert not any(op['payload']['kind']=='management-delete' for op in j.restorable()) and not j.pending()
 
 
 def test_delete_thread_keeps_project_and_rejects_stale_confirmation(tmp_path):
@@ -179,3 +179,41 @@ def test_retry_uses_authoritative_membership_despite_stale_desktop_assignment(tm
     monkeypatch.setattr(a,'import_conversation',original)
     assert management.recover_management(op,a,j).state=='completed'
     assert a.read_thread(tid)['projectId']!=p.id
+
+
+def test_batch_rename_and_undo_preserve_records(tmp_path):
+    a,p,tid,j=setup(tmp_path);q,other=make_project(a,tmp_path/'B','B')
+    before={t.id:t for t in a.snapshot().conversations}
+    ts=tuple(before.values());names=tuple('Renamed '+str(i) for i in range(len(ts)))
+    result=management.rename_threads(a,ts,names,j)
+    assert result.state=='completed'
+    op=next(x for x in j.restorable() if x['payload']['kind']=='rename-threads')
+    assert management.recover_management(op,a,j).state=='completed'
+    assert {t.id:t.title for t in a.snapshot().conversations}=={tid:t.title for tid,t in before.items()}
+    assert not j.restorable()
+
+
+def test_batch_validates_all_names_before_writing(tmp_path):
+    a,p,tid,j=setup(tmp_path);q,other=make_project(a,tmp_path/'B','B')
+    ts=a.snapshot().conversations
+    with pytest.raises(ValueError):management.rename_threads(a,ts,('Valid',''),j)
+    assert a.snapshot().conversations==ts and not j.pending()
+
+
+def test_batch_partial_failure_can_restore_and_rejects_later_edits(tmp_path,monkeypatch):
+    a,p,tid,j=setup(tmp_path);q,other=make_project(a,tmp_path/'B','B')
+    ts=a.snapshot().conversations;original=management.set_thread_name
+    calls=[]
+    def fail_second(adapter,tid,name):
+        calls.append(tid)
+        if len(calls)==2:raise RuntimeError('simulated interruption')
+        return original(adapter,tid,name)
+    monkeypatch.setattr(management,'set_thread_name',fail_second)
+    assert management.rename_threads(a,ts,('Changed A','Changed B'),j).state=='needs_recovery'
+    op=j.pending()[0];monkeypatch.setattr(management,'set_thread_name',original)
+    original(a,ts[1].id,'Later edit')
+    with pytest.raises(ValueError):management.recover_management(op,a,j)
+    assert next(t.title for t in a.snapshot().conversations if t.id==ts[0].id)=='Changed A'
+    original(a,ts[1].id,ts[1].title)
+    assert management.recover_management(op,a,j).state=='completed'
+    assert {t.id:t.title for t in a.snapshot().conversations}=={t.id:t.title for t in ts}

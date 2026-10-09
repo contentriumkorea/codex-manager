@@ -50,7 +50,7 @@ class MainWindow(ManagementActions,QMainWindow):
         apply_light_theme(QApplication.instance())
         self.setWindowIcon(QIcon(str(Path(__file__).parent/'app-icon.ico')))
         self.journal=Journal(self.state_dir/'journal.sqlite');self.snapshot=Snapshot((),(),'')
-        self.mode='projects';self.workers=[];self.sizes={};self.backups=[];self.active_bundle=None
+        self.mode='projects';self.section_queries={};self.workers=[];self.sizes={};self.backups=[];self.active_bundle=None
         self.size_scanner=SizeScanner(self);self._closing=False
         self._store_worker=None;self.stores={};self.store_dialog=None
         saved_stores=read_settings(self.state_dir/'settings.json').get('homes',[])
@@ -119,15 +119,21 @@ class MainWindow(ManagementActions,QMainWindow):
         p=self.selected_project();return (p.id,) if p else ()
 
     def set_mode(self,mode):
+        self.project_list.blockSignals(True)
+        self.section_queries[self.mode]=self.search.text()
+        self.search.blockSignals(True);self.search.setText(self.section_queries.get(mode,''));self.search.blockSignals(False)
         self.browsing_project=None;self.browser_stack.setCurrentWidget(self.project_list)
         self.mode=mode
-        self.show_internal.setVisible(mode in ('projects','unassigned'))
-        self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection if mode=='unassigned' else QAbstractItemView.SingleSelection)
+        self.show_internal.setVisible(mode in ('projects','unassigned','conversations'))
+        self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection if mode in ('unassigned','conversations') else QAbstractItemView.SingleSelection)
         for b,m in self.nav_buttons: b.setChecked(m==mode)
-        self.heading.setText({'projects':'모든 프로젝트','unassigned':'분류할 대화','backups':'백업','recovery':'작업 복구'}[mode])
+        self.heading.setText({'projects':'모든 프로젝트','conversations':'모든 대화','unassigned':'분류할 대화','backups':'백업','recovery':'작업 복구'}[mode])
+        self.chat_status.setVisible(mode in ('projects','unassigned','conversations'));self.chat_sort.setVisible(mode in ('unassigned','conversations'));self.thread_search.setVisible(mode=='projects')
+        self.import_button.setVisible(mode in ('projects','backups'));self.size_status.setVisible(mode=='projects')
         self.project_actions.setVisible(mode=='projects');self.sort.setVisible(mode=='projects');self.home_button.hide()
-        self.subtitle.setText({'projects':'프로젝트를 두 번 클릭해 파일을 살펴보세요. 파일과 대화가 함께 이동·백업됩니다.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다.'}[mode])
-        self.project_list.clear()
+        self.subtitle.setText({'projects':'프로젝트를 두 번 클릭해 파일을 살펴보세요. 파일과 대화가 함께 이동·백업됩니다.','conversations':'대화를 검색하고 여러 개 선택해 제목·프로젝트를 함께 정리하세요.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다.'}[mode])
+        self.project_list.clear();self.project_list.blockSignals(False)
+        self.footer.setText('Ctrl·Shift로 여러 개 선택 · Ctrl+A 전체 선택 · F2 이름 변경 · Delete 삭제' if mode in ('projects','conversations','unassigned') else '항목을 선택하면 오른쪽에서 상세 작업을 확인할 수 있습니다.')
         self.filter_list()
 
     def show_projects(self):
@@ -146,7 +152,7 @@ class MainWindow(ManagementActions,QMainWindow):
 
     def open_selected(self,item,*_):
         if self.mode=='projects':self.open_project()
-        elif self.mode=='unassigned':self.show_transcript(item)
+        elif self.mode in ('unassigned','conversations'):self.show_transcript(item)
         elif self.mode=='backups':self.restore()
         elif self.mode=='recovery':self.show_recovery()
 
@@ -165,12 +171,14 @@ class MainWindow(ManagementActions,QMainWindow):
             project=self.selected_project()
             if project and project.roots:menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(project.roots[0])))
         elif self.mode=='backups':menu.addAction('이 백업 복원하기…',self.restore)
-        elif self.mode=='unassigned':
+        elif self.mode in ('unassigned','conversations'):
             preview=QListWidgetItem(item.text());preview.setData(Qt.UserRole,item.data(Qt.UserRole))
             menu.addAction('대화 읽기',lambda:self.show_transcript(preview))
             ids=tuple(i.data(Qt.UserRole) for i in self.project_list.selectedItems())
             menu.addAction(f'프로젝트로 이동… ({len(ids)}개)',lambda:self.move_selected_threads(ids))
-            if len(ids)==1:menu.addAction('제목 변경…',lambda:self.rename_selected_thread(ids))
+            menu.addAction('제목 변경…' if len(ids)==1 else '제목 일괄 변경…',lambda:self.rename_selected_thread(ids))
+            menu.addAction('제목 복사',lambda:self.copy_thread_titles(ids))
+            menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(next(t.cwd for t in self.snapshot.conversations if t.id==preview.data(Qt.UserRole)))))
             menu.addAction(f'대화 삭제… ({len(ids)}개)',lambda:self.delete_selected_threads(ids))
         else:menu.addAction('중단된 작업 복구…',self.show_recovery)
         menu.exec(self.project_list.viewport().mapToGlobal(point))
@@ -182,7 +190,7 @@ class MainWindow(ManagementActions,QMainWindow):
         empty=self.project_list.count()==0 and self.browser_stack.currentWidget()==self.project_list
         self.empty_state.setVisible(empty)
         if self.search.text():text='검색 결과가 없습니다. 다른 이름이나 폴더 경로를 검색해 보세요.'
-        else:text={'projects':'아직 프로젝트가 없습니다.\n다른 위치 찾기로 기존 Codex 데이터를 연결하거나 백업을 가져오세요.','unassigned':'분류할 대화가 없습니다.','backups':'아직 등록된 백업이 없습니다.\n프로젝트에서 백업 만들기를 누르거나 기존 백업을 가져오세요.','recovery':'삭제한 항목이나 복구할 작업이 없습니다.'}[self.mode]
+        else:text={'projects':'아직 프로젝트가 없습니다.\n다른 위치 찾기로 기존 Codex 데이터를 연결하거나 백업을 가져오세요.','conversations':'표시할 대화가 없습니다. 필터를 변경하거나 다른 저장소를 확인하세요.','unassigned':'분류할 대화가 없습니다.','backups':'아직 등록된 백업이 없습니다.\n프로젝트에서 백업 만들기를 누르거나 기존 백업을 가져오세요.','recovery':'삭제한 항목이나 복구할 작업이 없습니다.'}[self.mode]
         self.empty_state.setText(text)
 
     def refresh(self,snapshot):
@@ -200,18 +208,23 @@ class MainWindow(ManagementActions,QMainWindow):
         scroll=self.project_list.verticalScrollBar().value();self.project_list.blockSignals(True);self.project_list.clear()
         if self.mode=='projects':
             self.project_list.configure(['이름','폴더 위치','대화','용량'])
-            projects=self.ordered_projects()
+            projects=self.ordered_projects();visible_ids={t.id for t in self.visible_conversations()}
             for p in projects:
                 ts=self.project_threads(p.id)
                 if query and query not in p.name.lower() and not any(query in str(r).lower() for r in p.roots) and not any(query in t.title.lower() for t in ts): continue
-                item=self.project_list.add_record([p.name,str(p.roots[0])+(f' 외 {len(p.roots)-1}곳' if len(p.roots)>1 else '') if p.roots else '폴더 없음',str(sum(not t.internal or self.show_internal.isChecked() for t in ts)),self.size_text(p.id)],p.id,self.style().standardIcon(QStyle.SP_DirIcon));item.setToolTip(3,self.size_tooltip(p.id))
+                item=self.project_list.add_record([p.name,str(p.roots[0])+(f' 외 {len(p.roots)-1}곳' if len(p.roots)>1 else '') if p.roots else '폴더 없음',str(sum(t.id in visible_ids for t in ts)),self.size_text(p.id)],p.id,self.style().standardIcon(QStyle.SP_DirIcon));item.setToolTip(3,self.size_tooltip(p.id))
                 if p.id==old: self.project_list.setCurrentItem(item)
-        elif self.mode=='unassigned':
-            self.project_list.configure(['대화 이름','기록된 폴더'])
-            for t in self.snapshot.conversations:
-                if t.internal and not self.show_internal.isChecked():continue
-                if self.membership.projects.get(t.id) is None and (not query or query in (t.title+' '+str(t.cwd)).lower()):
-                    item=QListWidgetItem(t.title+(' · 내부 작업' if t.internal else '')+'\n'+str(t.cwd));item.setData(Qt.UserRole,t.id);self.project_list.addItem(item)
+        elif self.mode in ('unassigned','conversations'):
+            self.project_list.configure(['대화 제목','프로젝트','최근 작업','상태'])
+            self.project_list.setColumnWidth(0,270);self.project_list.setColumnWidth(1,170);self.project_list.setColumnWidth(2,135)
+            project_names={p.id:p.name for p in self.snapshot.projects}
+            threads=self.visible_conversations(query=query)
+            for t in threads:
+                pid=self.membership.projects.get(t.id)
+                if self.mode=='unassigned' and pid is not None:continue
+                state=('보관됨' if t.archived else '일반 대화')+(' · 내부' if t.internal else '')
+                item=self.project_list.add_record([t.title,project_names.get(pid,'프로젝트 없음'),self.chat_date(t.updated_at),state],t.id)
+                item.setToolTip(0,t.title+'\n'+str(t.cwd))
         elif self.mode=='backups':
             self.project_list.configure(['프로젝트','백업 위치'])
             for bundle in self.backups:
@@ -224,12 +237,12 @@ class MainWindow(ManagementActions,QMainWindow):
             self.project_list.configure(['작업','작업 번호'])
             for operation in self.recovery_items():
                 if query and query not in (operation['payload'].get('kind','작업')+' '+operation['id']).lower():continue
-                title=('삭제 복구 · '+operation['payload'].get('label','')) if operation['payload'].get('kind')=='management-delete' else operation['payload'].get('kind','작업')+' · '+operation['state']
+                title=('제목 변경 되돌리기 · '+operation['payload'].get('label',operation['payload'].get('new_name',''))) if operation['payload'].get('kind') in ('rename-thread','rename-threads') else ('삭제 복구 · '+operation['payload'].get('label','')) if operation['payload'].get('kind')=='management-delete' else operation['payload'].get('kind','작업')+' · '+operation['state']
                 item=QListWidgetItem(title+'\n'+operation['id']);item.setData(Qt.UserRole,operation['id']);self.project_list.addItem(item)
         if old is not None and self.project_list.currentItem() is None:
             for n in range(self.project_list.count()):
                 if self.project_list.item(n).data(Qt.UserRole)==old:self.project_list.setCurrentRow(n);break
-        if self.mode=='unassigned':
+        if self.mode in ('unassigned','conversations'):
             for n in range(self.project_list.count()):
                 item=self.project_list.item(n);item.setSelected(item.data(Qt.UserRole) in old_selection)
         self.project_list.blockSignals(False);self.project_list.verticalScrollBar().setValue(scroll);self.show_detail();self.update_empty_state()
@@ -241,7 +254,7 @@ class MainWindow(ManagementActions,QMainWindow):
         self.assign_action.setVisible(self.mode=='unassigned')
         p=self.selected_project()
         self.open_button.setEnabled(p is not None);self.more.setEnabled(p is not None)
-        self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False);self.assign_action.setEnabled(self.project_list.currentItem() is not None);self.recovery_action.setEnabled(self.project_list.currentItem() is not None)
+        self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False);self.assign_action.setEnabled(bool(self.project_list.selectedItems()));self.recovery_action.setEnabled(self.project_list.currentItem() is not None)
         if self.browsing_project and (not p or p.id!=self.browsing_project):self.show_projects()
         if self.browsing_project and p:self.file_browser.set_project(p);self.heading.setText(p.name)
         for b in self.buttons.values(): b.setEnabled(p is not None)
@@ -255,8 +268,7 @@ class MainWindow(ManagementActions,QMainWindow):
             self.detail_title.setText(p.name)
             for path in p.roots:
                 item=QListWidgetItem(str(path)+('' if path.exists() else '\n폴더 없음'));item.setToolTip(str(path));item.setData(Qt.UserRole,str(path));self.folder_list.addItem(item)
-            for t in self.snapshot.conversations:
-                if t.internal and not self.show_internal.isChecked():continue
+            for t in self.visible_conversations(query=self.thread_search.text(),project_only=True):
                 if self.membership.projects.get(t.id)==p.id:
                     label=t.title+('  ·  내부 작업' if t.internal else '')+('  ·  보관됨' if t.archived else '')+('  ·  원래 대화 기준' if self.membership.reasons.get(t.id)=='parent' else '  ·  폴더 기준' if t.id in self.membership.inferred else '')
                     item=QListWidgetItem(label);item.setToolTip(str(t.cwd));item.setData(Qt.UserRole,t.id);self.thread_list.addItem(item)
@@ -269,8 +281,8 @@ class MainWindow(ManagementActions,QMainWindow):
         else:
             self.detail_title.setText('프로젝트를 선택하세요' if self.mode=='projects' else '항목을 선택하세요')
             self.detail_status.setText('선택한 항목의 대화와 폴더가 여기에 표시됩니다.')
-            item=self.project_list.currentItem()
-            if item and self.mode=='unassigned':
+            item=self.project_list.currentItem() or next(iter(self.project_list.selectedItems()),None)
+            if item and self.mode in ('unassigned','conversations'):
                 tid=item.data(Qt.UserRole);t=next(t for t in self.snapshot.conversations if t.id==tid)
                 ids={i.data(Qt.UserRole) for i in self.project_list.selectedItems()} or {tid}
                 self.detail_title.setText(t.title if len(ids)==1 else f'대화 {len(ids)}개 선택')
@@ -278,7 +290,7 @@ class MainWindow(ManagementActions,QMainWindow):
                     if selected_thread.id in ids:
                         i=QListWidgetItem(selected_thread.title);i.setData(Qt.UserRole,selected_thread.id);self.thread_list.addItem(i)
                 reason=self.membership.reasons.get(tid,'outside')
-                self.detail_status.setText({'internal_parent':'원래 대화의 프로젝트 연결을 확인할 수 없는 내부 작업 기록입니다.','ambiguous':'여러 프로젝트가 같은 폴더를 사용합니다. 연결할 프로젝트를 선택하세요.','projectless':'Codex에서 프로젝트 없는 대화로 지정됐습니다.','missing_project':'기록된 프로젝트를 현재 저장소에서 찾을 수 없습니다.','other_host':'다른 연결 호스트의 대화입니다.'}.get(reason,'현재 프로젝트 폴더와 맞는 경로가 없습니다. 옛 경로이거나 프로젝트가 제거됐을 수 있습니다.'))
+                self.detail_status.setText(('프로젝트: '+next((p.name for p in self.snapshot.projects if p.id==self.membership.projects.get(tid)),'없음')+'\n'+str(t.cwd)) if self.mode=='conversations' else {'internal_parent':'원래 대화의 프로젝트 연결을 확인할 수 없는 내부 작업 기록입니다.','ambiguous':'여러 프로젝트가 같은 폴더를 사용합니다. 연결할 프로젝트를 선택하세요.','projectless':'Codex에서 프로젝트 없는 대화로 지정됐습니다.','missing_project':'기록된 프로젝트를 현재 저장소에서 찾을 수 없습니다.','other_host':'다른 연결 호스트의 대화입니다.'}.get(reason,'현재 프로젝트 폴더와 맞는 경로가 없습니다. 옛 경로이거나 프로젝트가 제거됐을 수 있습니다.'))
             if item and self.mode=='backups':
                 self.active_bundle=Path(item.data(Qt.UserRole))
                 try:
@@ -295,6 +307,7 @@ class MainWindow(ManagementActions,QMainWindow):
         for n in range(self.thread_list.count()):
             item=self.thread_list.item(n)
             if item.data(Qt.UserRole) in selected_threads:item.setSelected(True)
+        self.detail_title.setToolTip(self.detail_title.text());self.detail_status.setToolTip(self.detail_status.text())
         self.sync_thread_actions()
 
     def run_job(self,title,func,done=None):
@@ -331,6 +344,26 @@ class MainWindow(ManagementActions,QMainWindow):
             if mode==1:return (p.name.casefold(),)
             return (result is None,(-result.total if mode==0 else result.total) if result else 0,p.name.casefold())
         return sorted(self.snapshot.projects,key=key)
+
+    @staticmethod
+    def chat_date(value):
+        try:return datetime.fromtimestamp(value).strftime('%Y-%m-%d %H:%M') if value else '—'
+        except (ValueError,OSError,OverflowError):return '—'
+
+    def visible_conversations(self,query='',project_only=False):
+        names={p.id:p.name for p in self.snapshot.projects};query=query.casefold().strip()
+        status=self.chat_status.currentIndex();result=[]
+        for t in self.snapshot.conversations:
+            if t.internal and not self.show_internal.isChecked():continue
+            if status==1 and t.archived or status==2 and not t.archived:continue
+            text=t.title if project_only else t.title+' '+str(t.cwd)+' '+names.get(self.membership.projects.get(t.id),'')
+            if query and query not in text.casefold():continue
+            result.append(t)
+        order=self.chat_sort.currentIndex()
+        if order==1:result.sort(key=lambda t:(t.title.casefold(),t.id))
+        elif order==2:result.sort(key=lambda t:(names.get(self.membership.projects.get(t.id),'').casefold(),t.title.casefold(),t.id))
+        else:result.sort(key=lambda t:(-t.updated_at,t.id))
+        return result
 
     def project_threads(self,pid):return [t for t in self.snapshot.conversations if self.membership.projects.get(t.id)==pid]
     def folder_threads(self,pid):return [t for t in self.snapshot.conversations if self.membership.inferred.get(t.id)==pid]
@@ -496,10 +529,10 @@ class MainWindow(ManagementActions,QMainWindow):
         if not p or not self.guard_change(): return
         others=[q for q in self.snapshot.projects if q.id!=p.id and q.roots]
         if not others: QMessageBox.information(self,'합치기','합칠 대상 프로젝트가 없습니다.');return
-        labels=[q.name+' · '+str(q.roots[0]) for q in others]
-        label,ok=QInputDialog.getItem(self,'프로젝트 합치기','대상 프로젝트',labels,0,False)
-        if not ok: return
-        target=others[labels.index(label)]
+        from .naming import ProjectPicker
+        dialog=ProjectPicker(self,others,'프로젝트 합치기',f'«{p.name}»의 파일과 대화를 받을 프로젝트를 선택하세요. 다음 단계에서 경로와 원본 정리 여부를 확인합니다.')
+        if dialog.exec()!=QDialog.Accepted:return
+        target=next(q for q in others if q.id==dialog.project_id())
         safe=re.sub(r'[<>:"/\\|?*]','_',p.name).strip('. ') or 'project'
         destinations={str(r):target.roots[0]/safe/(r.name if len(p.roots)>1 else '') for r in p.roots}
         self.start_transfer(p,destinations,target)
@@ -571,9 +604,9 @@ class MainWindow(ManagementActions,QMainWindow):
         data=next(p for p in self.recovery_items() if p['id']==operation_id)
         recovery=data['payload'].get('recovery')
         events=self.journal.events(operation_id)
-        error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'삭제한 항목을 복구할 수 있습니다.' if data['state']=='completed' else '작업이 중단됐습니다.')
+        error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'이전 상태로 되돌릴 수 있습니다.' if data['state']=='completed' else '작업이 중단됐습니다.')
         text='작업 상태: '+data['state']+'\n\n'+error+'\n\n'
-        if data['payload']['kind']=='rename-thread':text+='변경 전 대화 제목으로 되돌립니다.'
+        if data['payload']['kind'] in ('rename-thread','rename-threads'):text+='변경 전 대화 제목으로 되돌립니다.'
         elif recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
         elif data['payload']['kind']=='connections': text+='이전 프로젝트 이름·폴더 연결·대화 소속을 복구합니다.'
         elif data['payload']['kind']=='export-cleanup': text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n정리 중 삭제된 대화와 파일을 백업에서 복구합니다. 남아 있는 대화와 변경된 파일은 보존합니다.'

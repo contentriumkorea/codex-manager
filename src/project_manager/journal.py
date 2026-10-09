@@ -34,8 +34,8 @@ class Journal:
 
     def restorable(self):
         with self.connect() as c:
-            records=[{'id':r[0],'state':r[1],'payload':json.loads(r[2])} for r in c.execute("SELECT id,state,payload FROM operations WHERE state='completed'")]
-        return [r for r in records if r['payload'].get('kind')=='management-delete' and not any(e['payload'].get('recovered') for e in self.events(r['id']))]
+            records=[{'id':r[0],'state':r[1],'payload':json.loads(r[2])} for r in c.execute("SELECT id,state,payload FROM operations WHERE state='completed' ORDER BY rowid DESC")]
+        return [r for r in records if r['payload'].get('kind') in ('management-delete','rename-thread','rename-threads') and not any(e['payload'].get('recovered') for e in self.events(r['id']))]
 
     def events(self,operation_id):
         with self.connect() as c:
