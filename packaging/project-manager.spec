@@ -3,6 +3,7 @@ root=Path(SPECPATH).parent
 a=Analysis([str(root/'packaging/launcher.py')],pathex=[str(root/'src')],binaries=[],
            datas=[(str(root/'src/project_manager/ui/theme.qss'),'project_manager/ui'),(str(root/'src/project_manager/ui/app-icon.ico'),'project_manager/ui'),(str(root/'src/project_manager/ui/app-icon.png'),'project_manager/ui'),(str(root/'src/project_manager/install_update.ps1'),'project_manager')],
            hiddenimports=[],hookspath=[],hooksconfig={},runtime_hooks=[],excludes=[],noarchive=False,optimize=0)
+a.datas.append(('project_manager/ui/check.svg',str(root/'src/project_manager/ui/check.svg'),'DATA'))
 # Qt 6.11.2 uses Windows' unversioned ICU exports. A Poppler runtime on PATH
 # supplies an incompatible ICU DLL; leave ICU resolution to Windows itself.
 a.binaries=[entry for entry in a.binaries if not Path(entry[0]).name.lower().startswith('icu')]

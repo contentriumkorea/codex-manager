@@ -31,6 +31,8 @@ def main():
         set_id.argtypes=[ctypes.c_wchar_p];set_id.restype=ctypes.c_long
         set_id('Contentrium.CodexManager')
     app=QApplication(sys.argv[:1]);app.setApplicationName(APP_NAME);app.setOrganizationName('Contentrium')
+    from .ui.appearance import apply_light_theme
+    apply_light_theme(app)
     app.setWindowIcon(QIcon(str(Path(__file__).parent/'ui/app-icon.ico')))
     try:
         args.state_dir.mkdir(parents=True,exist_ok=True)

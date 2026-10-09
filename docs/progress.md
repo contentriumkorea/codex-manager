@@ -99,3 +99,11 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Reviewed 1420x860 and 1060x680 source UI and the final packaged executable screenshot. Independent targeted re-review found no remaining blockers.
 - Final packaged updater verified v0.4.0 startup, installation path/PID, retained settings and unknown files; ready in 4.422 seconds, total 15.844 seconds in this isolated run. Public-release/local-install proof follows in local .test-artifacts reports.
 - Real user project files and conversations were not modified for QA. Other physical PCs and mobile remain unverified.
+
+2026-10-09 Codex Manager v0.5.0 light glass UI:
+- Applied a white/silver visual system with a static blue/lavender diffused backdrop, translucent rounded panels, white edges, and soft shadows. Kept project/file/conversation management behavior unchanged.
+- Set a consistent light Fusion palette before all application windows, including startup-error dialogs. Menus, inputs, selections, tooltips, checkboxes, progress controls and update/delete dialogs share the light theme.
+- Included the check-mark SVG in setuptools and PyInstaller, with quoted absolute resource paths supporting spaces and Korean directory names. The approved application icon is unchanged.
+- Existing UI theme assertion now verifies the rendered light background and effective dark text. Full suite: 146 passed in 99.60 seconds; independent review found no release blocker.
+- Visually inspected source overview/files at 1420x860 and 1060x680, empty states, menu, rename, delete and update dialogs. Inspected the final packaged main window and a frozen production update dialog, including its check-mark resource.
+- Native packaged updater passed replacement/startup/version/path/PID health and preservation of settings/unknown user files (15.906 seconds in this isolated run). Single-click update proof and public/local deployment reports are under .test-artifacts.

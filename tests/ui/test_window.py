@@ -2,9 +2,10 @@ from pathlib import Path
 from project_manager.models import Project,Conversation,Snapshot
 from project_manager.ui.window import MainWindow
 from project_manager.codex.adapter import CodexAdapter
+from PySide6.QtGui import QPalette
 
 
-def test_window_dark_catalog_and_selection(qtbot,tmp_path):
+def test_window_light_catalog_and_selection(qtbot,tmp_path):
     w=MainWindow(CodexAdapter(tmp_path/'home',isolated=True),tmp_path/'state',auto_refresh=False)
     qtbot.addWidget(w)
     p=Project('p','테스트 A',(tmp_path/'A',))
@@ -13,7 +14,9 @@ def test_window_dark_catalog_and_selection(qtbot,tmp_path):
     assert w.project_list.count()==1
     w.project_list.setCurrentRow(0)
     assert w.thread_list.count()==1
-    assert '#171717' in w.styleSheet()
+    w.ensurePolished();w.project_list.ensurePolished()
+    assert w.grab().toImage().pixelColor(5,5).lightness()>220
+    assert w.project_list.palette().color(QPalette.Text).lightness()<100
     assert not w.cleanup_button.isEnabled()
 
 

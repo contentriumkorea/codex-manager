@@ -1,1 +1,1 @@
-"""Minimal dark Windows UI."""
+"""Light glass Windows UI."""

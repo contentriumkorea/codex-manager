@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButto
     QComboBox,QSplitter,QStackedWidget,QTabWidget,QListWidget,QAbstractItemView,QMenu)
 from .explorer import ProjectTable,FileBrowser
 from ..version import APP_NAME,VERSION
+from .appearance import GlassBackdrop,panel_shadow
 
 
 def label(text,kind='muted'):
@@ -14,8 +15,8 @@ def label(text,kind='muted'):
 
 def build_layout(w):
     w.resize(1420,860);w.setMinimumSize(1060,680)
-    base=QWidget();w.setCentralWidget(base);outer=QHBoxLayout(base);outer.setContentsMargins(0,0,0,0);outer.setSpacing(0)
-    sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(194)
+    base=GlassBackdrop();w.setCentralWidget(base);outer=QHBoxLayout(base);outer.setContentsMargins(16,16,16,16);outer.setSpacing(20)
+    sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(194);panel_shadow(sidebar)
     nav=QVBoxLayout(sidebar);nav.setContentsMargins(16,22,16,18);nav.setSpacing(8)
     logo=QLabel();logo.setPixmap(QIcon(str(Path(__file__).parent/'app-icon.ico')).pixmap(40,40));nav.addWidget(logo)
     nav.addWidget(label(APP_NAME,'brand'));nav.addWidget(label('파일과 대화를 한곳에서'));nav.addSpacing(26)
@@ -28,7 +29,7 @@ def build_layout(w):
     stores=QPushButton('다른 위치 찾기');stores.clicked.connect(w.open_stores);nav.addWidget(stores)
     w.update_button=QPushButton('업데이트');w.update_button.clicked.connect(lambda:w.open_updates());nav.addWidget(w.update_button)
     nav.addWidget(label('v'+VERSION+' · CONTENTRIUM'));outer.addWidget(sidebar)
-    content=QVBoxLayout();content.setContentsMargins(24,23,24,14);content.setSpacing(13);outer.addLayout(content,1)
+    content=QVBoxLayout();content.setContentsMargins(0,7,0,0);content.setSpacing(14);outer.addLayout(content,1)
     top=QHBoxLayout();w.home_button=QPushButton('프로젝트');w.home_button.setObjectName('crumb');w.home_button.clicked.connect(w.show_projects);top.addWidget(w.home_button)
     w.heading=label('모든 프로젝트','heading');top.addWidget(w.heading);top.addStretch()
     w.search=QLineEdit();w.search.setPlaceholderText('이름, 폴더, 대화 검색');w.search.setClearButtonEnabled(True);w.search.setMaximumWidth(250);w.search.textChanged.connect(w.filter_list);top.addWidget(w.search)
@@ -45,15 +46,15 @@ def build_layout(w):
     w.sort=QComboBox();w.sort.addItems(['용량 큰 순','이름 순','용량 작은 순']);w.sort.setFixedWidth(120);w.sort.currentIndexChanged.connect(w.filter_list);toolbar.addWidget(w.sort)
     w.import_button=QPushButton('백업 가져오기');w.import_button.clicked.connect(w.open_backup);toolbar.addWidget(w.import_button);content.addLayout(toolbar)
     w.move_button=w.buttons['move'];w.cleanup_button=w.buttons['cleanup']
-    w.split=QSplitter(Qt.Horizontal);content.addWidget(w.split,1)
-    center=QWidget();center_layout=QVBoxLayout(center);center_layout.setContentsMargins(0,0,0,0);center_layout.setSpacing(0)
+    w.split=QSplitter(Qt.Horizontal);w.split.setHandleWidth(16);content.addWidget(w.split,1)
+    center=QWidget();center.setObjectName('browserPanel');panel_shadow(center);center_layout=QVBoxLayout(center);center_layout.setContentsMargins(12,14,12,14);center_layout.setSpacing(0)
     w.browser_stack=QStackedWidget();w.project_list=ProjectTable();w.project_list.currentItemChanged.connect(w.show_detail)
     w.project_list.itemDoubleClicked.connect(w.open_selected);w.project_list.customContextMenuRequested.connect(w.project_context_menu)
     w.project_list.itemSelectionChanged.connect(lambda:w.show_detail() if w.mode=='unassigned' else None)
     w.browser_stack.addWidget(w.project_list);w.file_browser=FileBrowser();w.file_browser.back_to_projects.connect(w.show_projects);w.browser_stack.addWidget(w.file_browser)
     center_layout.addWidget(w.browser_stack,1);w.empty_state=label('불러오는 중입니다.','empty');w.empty_state.setAlignment(Qt.AlignCenter);center_layout.addWidget(w.empty_state)
     w.split.addWidget(center)
-    detail=QWidget();detail.setObjectName('details');detail.setMinimumWidth(280);dl=QVBoxLayout(detail);dl.setContentsMargins(20,15,12,12);dl.setSpacing(12)
+    detail=QWidget();detail.setObjectName('details');detail.setMinimumWidth(280);panel_shadow(detail);dl=QVBoxLayout(detail);dl.setContentsMargins(17,20,17,16);dl.setSpacing(12)
     w.detail_title=label('프로젝트를 선택하세요','detailTitle');dl.addWidget(w.detail_title)
     w.folder_size=label('');dl.addWidget(w.folder_size)
     w.detail_tabs=QTabWidget();dl.addWidget(w.detail_tabs,1)

@@ -46,6 +46,8 @@ class Worker(QThread):
 class MainWindow(ManagementActions,QMainWindow):
     def __init__(self,adapter,state_dir,auto_refresh=True,start_update_check=True):
         super().__init__();self.adapter=adapter;self.state_dir=Path(state_dir)
+        from .appearance import apply_light_theme
+        apply_light_theme(QApplication.instance())
         self.setWindowIcon(QIcon(str(Path(__file__).parent/'app-icon.ico')))
         self.journal=Journal(self.state_dir/'journal.sqlite');self.snapshot=Snapshot((),(),'')
         self.mode='projects';self.workers=[];self.sizes={};self.backups=[];self.active_bundle=None
@@ -68,7 +70,6 @@ class MainWindow(ManagementActions,QMainWindow):
                 self.startup_update_check=saved.get('startup_update_check',True) is not False
             except (ValueError,OSError): pass
         self.setWindowTitle(APP_NAME);self.resize(1260,810);self.setMinimumSize(950,630)
-        self.setStyleSheet((Path(__file__).parent/'theme.qss').read_text(encoding='utf-8'))
         from .layout import build_layout
         self.browsing_project=None
         build_layout(self)

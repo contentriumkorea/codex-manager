@@ -1,6 +1,6 @@
 # Codex Manager
 
-파일 탐색기처럼 사용하는 Windows용 Codex 프로젝트·대화·폴더 관리 도구. 다크 UI로 이동, 합치기, 연결 관리, 대화 포함 백업과 새 경로 복원을 제공합니다.
+파일 탐색기처럼 사용하는 Windows용 Codex 프로젝트·대화·폴더 관리 도구. 화이트·실버 글래스모피즘 UI로 이동, 합치기, 연결 관리, 대화 포함 백업과 새 경로 복원을 제공합니다. 블루·라벤더 배경과 반투명 패널, 선명한 차콜 글자를 사용하며 메뉴·확인창·업데이트 화면도 밝은 톤으로 통일했습니다.
 
 프로젝트·대화 우클릭으로 이름 변경과 삭제를 처리합니다. 여러 대화를 선택해 다른 프로젝트로 이동하거나 삭제할 수 있습니다. 삭제 전 복구 사본을 검증하고, 작업 복구에서 되살립니다. 실제 작업 파일 삭제는 별도 선택이며 기본값은 파일 유지입니다.
 
@@ -18,7 +18,7 @@
 .venv/Scripts/python.exe -m pytest tests -q
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
 .venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.4.0 --root .test-artifacts/update-verification
+.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.5.0 --root .test-artifacts/update-verification
 .venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
 ```
 

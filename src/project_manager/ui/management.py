@@ -20,6 +20,7 @@ class DeleteDialog(QDialog):
             roots=QLabel('\n'.join(str(p) for p in plan.project.roots));roots.setWordWrap(True);layout.addWidget(roots)
         buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText('삭제');buttons.button(QDialogButtonBox.Cancel).setText('취소')
+        buttons.button(QDialogButtonBox.Ok).setObjectName('danger')
         buttons.button(QDialogButtonBox.Cancel).setDefault(True)
         buttons.accepted.connect(self.accept);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
 
