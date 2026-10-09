@@ -121,6 +121,7 @@ class CodexAdapter:
     def update_project(self, project):
         self.call('project/update',{'projectId':project.id,'name':project.name,'roots':[{'path':str(p.resolve())} for p in project.roots]})
         updated=self.call('project/read',{'projectId':project.id})['project']
+        if updated['name']!=project.name: raise RuntimeError('프로젝트 이름 재조회가 일치하지 않습니다.')
         if [clean_path(p['path']).resolve() for p in updated['roots']]!=[p.resolve() for p in project.roots]:
             raise RuntimeError('프로젝트 폴더 재조회가 일치하지 않습니다.')
 

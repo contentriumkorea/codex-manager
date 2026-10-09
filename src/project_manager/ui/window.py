@@ -24,6 +24,7 @@ from ..grouping import display_membership
 from ..stores import Store,store_info,discover_stores,default_search_roots
 from ..version import APP_NAME,VERSION
 from ..settings import read_settings,save_settings
+from .management import ManagementActions
 
 
 def bytes_text(size):
@@ -42,7 +43,7 @@ class Worker(QThread):
         except Exception as exc: self.error.emit(str(exc))
 
 
-class MainWindow(QMainWindow):
+class MainWindow(ManagementActions,QMainWindow):
     def __init__(self,adapter,state_dir,auto_refresh=True,start_update_check=True):
         super().__init__();self.adapter=adapter;self.state_dir=Path(state_dir)
         self.setWindowIcon(QIcon(str(Path(__file__).parent/'app-icon.ico')))
@@ -119,10 +120,11 @@ class MainWindow(QMainWindow):
     def set_mode(self,mode):
         self.browsing_project=None;self.browser_stack.setCurrentWidget(self.project_list)
         self.mode=mode
+        self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection if mode=='unassigned' else QAbstractItemView.SingleSelection)
         for b,m in self.nav_buttons: b.setChecked(m==mode)
         self.heading.setText({'projects':'모든 프로젝트','unassigned':'분류할 대화','backups':'백업','recovery':'작업 복구'}[mode])
         self.project_actions.setVisible(mode=='projects');self.sort.setVisible(mode=='projects');self.home_button.hide()
-        self.subtitle.setText({'projects':'프로젝트를 두 번 클릭해 파일을 살펴보세요. 파일과 대화가 함께 이동·백업됩니다.','unassigned':'프로젝트를 찾지 못한 대화입니다. 내용을 확인하고 원하는 프로젝트로 분류하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'중단된 작업을 확인하고 이전 상태로 복구할 수 있습니다.'}[mode])
+        self.subtitle.setText({'projects':'프로젝트를 두 번 클릭해 파일을 살펴보세요. 파일과 대화가 함께 이동·백업됩니다.','unassigned':'프로젝트를 찾지 못한 대화입니다. 내용을 확인하고 원하는 프로젝트로 분류하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다.'}[mode])
         self.project_list.clear()
         self.filter_list()
 
@@ -154,26 +156,31 @@ class MainWindow(QMainWindow):
     def project_context_menu(self,point):
         item=self.project_list.itemAt(point)
         if not item:return
-        self.project_list.setCurrentItem(item);menu=QMenu(self)
+        if not item.isSelected():self.project_list.clearSelection();self.project_list.setCurrentItem(item)
+        menu=QMenu(self)
         if self.mode=='projects':
-            for title,callback in [('열기',self.open_project),('옮기기…',self.move),('다른 프로젝트와 합치기…',self.merge),('백업 만들기…',self.backup),('프로젝트 설정…',self.connections)]:menu.addAction(title,callback)
+            for title,callback in [('열기',self.open_project),('이름 변경…',self.rename_selected_project),('옮기기…',self.move),('다른 프로젝트와 합치기…',self.merge),('백업 만들기…',self.backup),('프로젝트 설정…',self.connections),('프로젝트 삭제…',self.delete_selected_project)]:menu.addAction(title,callback)
             project=self.selected_project()
             if project and project.roots:menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(project.roots[0])))
         elif self.mode=='backups':menu.addAction('이 백업 복원하기…',self.restore)
         elif self.mode=='unassigned':
             preview=QListWidgetItem(item.text());preview.setData(Qt.UserRole,item.data(Qt.UserRole))
-            menu.addAction('대화 읽기',lambda:self.show_transcript(preview));menu.addAction('프로젝트로 분류…',self.assign_unassigned)
+            menu.addAction('대화 읽기',lambda:self.show_transcript(preview))
+            ids=tuple(i.data(Qt.UserRole) for i in self.project_list.selectedItems())
+            menu.addAction(f'프로젝트로 이동… ({len(ids)}개)',lambda:self.move_selected_threads(ids))
+            if len(ids)==1:menu.addAction('제목 변경…',lambda:self.rename_selected_thread(ids))
+            menu.addAction(f'대화 삭제… ({len(ids)}개)',lambda:self.delete_selected_threads(ids))
         else:menu.addAction('중단된 작업 복구…',self.show_recovery)
         menu.exec(self.project_list.viewport().mapToGlobal(point))
 
     def show_help(self):
-        QMessageBox.information(self,'Codex Manager 사용 안내','1. 프로젝트를 두 번 클릭하면 파일과 폴더가 열립니다.\n2. 오른쪽 대화를 두 번 클릭하면 내용을 읽을 수 있습니다.\n3. 프로젝트를 선택하고 옮기기·합치기·백업 만들기를 누르세요.\n\n외장하드에 보관하기\n백업 만들기 → 외장하드 선택. 파일과 대화를 함께 보관합니다.\n\n다른 컴퓨터로 가져오기\n백업 가져오기 → 백업 폴더 선택 → 이 백업 복원하기.\n\n원본 정리\n복원한 대화에서 실제로 이어 쓴 뒤 백업의 복원 상태를 확인하세요. 확인을 마치면 원래 프로젝트의 더 보기에서 원본을 정리할 수 있습니다.\n\n이동·합치기·복원은 Codex 앱을 종료한 상태에서 진행하세요.\nCtrl+F 검색 · F5 새로고침 · Alt+← 뒤로')
+        QMessageBox.information(self,'Codex Manager 사용 안내','1. 프로젝트를 두 번 클릭하면 파일과 폴더가 열립니다.\n2. 오른쪽 대화를 두 번 클릭하면 내용을 읽을 수 있습니다.\n3. 프로젝트를 선택하고 옮기기·합치기·백업 만들기를 누르세요.\n4. 프로젝트 우클릭으로 이름 변경·삭제를 할 수 있습니다.\n5. 대화는 Ctrl·Shift로 여러 개 선택하고 대화 관리에서 제목 변경·이동·삭제합니다.\n6. 삭제한 항목은 작업 복구에서 되살릴 수 있습니다.\n\n외장하드에 보관하기\n백업 만들기 → 외장하드 선택. 파일과 대화를 함께 보관합니다.\n\n다른 컴퓨터로 가져오기\n백업 가져오기 → 백업 폴더 선택 → 이 백업 복원하기.\n\n원본 정리\n복원한 대화에서 실제로 이어 쓴 뒤 백업의 복원 상태를 확인하세요. 확인을 마치면 원래 프로젝트의 더 보기에서 원본을 정리할 수 있습니다.\n\n이동·합치기·복원은 Codex 앱을 종료한 상태에서 진행하세요.\nCtrl+F 검색 · F5 새로고침 · Alt+← 뒤로')
 
     def update_empty_state(self):
         empty=self.project_list.count()==0 and self.browser_stack.currentWidget()==self.project_list
         self.empty_state.setVisible(empty)
         if self.search.text():text='검색 결과가 없습니다. 다른 이름이나 폴더 경로를 검색해 보세요.'
-        else:text={'projects':'아직 프로젝트가 없습니다.\n다른 위치 찾기로 기존 Codex 데이터를 연결하거나 백업을 가져오세요.','unassigned':'분류할 대화가 없습니다.','backups':'아직 등록된 백업이 없습니다.\n프로젝트에서 백업 만들기를 누르거나 기존 백업을 가져오세요.','recovery':'복구가 필요한 작업이 없습니다.'}[self.mode]
+        else:text={'projects':'아직 프로젝트가 없습니다.\n다른 위치 찾기로 기존 Codex 데이터를 연결하거나 백업을 가져오세요.','unassigned':'분류할 대화가 없습니다.','backups':'아직 등록된 백업이 없습니다.\n프로젝트에서 백업 만들기를 누르거나 기존 백업을 가져오세요.','recovery':'삭제한 항목이나 복구할 작업이 없습니다.'}[self.mode]
         self.empty_state.setText(text)
 
     def refresh(self,snapshot):
@@ -187,6 +194,7 @@ class MainWindow(QMainWindow):
     def filter_list(self):
         query=self.search.text().lower();selected=self.project_list.currentItem()
         old=selected.data(Qt.UserRole) if selected else None
+        old_selection={i.data(Qt.UserRole) for i in self.project_list.selectedItems()}
         scroll=self.project_list.verticalScrollBar().value();self.project_list.blockSignals(True);self.project_list.clear()
         if self.mode=='projects':
             self.project_list.configure(['이름','폴더 위치','대화','용량'])
@@ -211,15 +219,20 @@ class MainWindow(QMainWindow):
                 if str(bundle)==old:self.project_list.setCurrentItem(added)
         else:
             self.project_list.configure(['작업','작업 번호'])
-            for operation in self.journal.pending():
+            for operation in self.recovery_items():
                 if query and query not in (operation['payload'].get('kind','작업')+' '+operation['id']).lower():continue
-                item=QListWidgetItem(operation['payload'].get('kind','작업')+' · '+operation['state']+'\n'+operation['id']);item.setData(Qt.UserRole,operation['id']);self.project_list.addItem(item)
+                title=('삭제 복구 · '+operation['payload'].get('label','')) if operation['payload'].get('kind')=='management-delete' else operation['payload'].get('kind','작업')+' · '+operation['state']
+                item=QListWidgetItem(title+'\n'+operation['id']);item.setData(Qt.UserRole,operation['id']);self.project_list.addItem(item)
         if old is not None and self.project_list.currentItem() is None:
             for n in range(self.project_list.count()):
                 if self.project_list.item(n).data(Qt.UserRole)==old:self.project_list.setCurrentRow(n);break
+        if self.mode=='unassigned':
+            for n in range(self.project_list.count()):
+                item=self.project_list.item(n);item.setSelected(item.data(Qt.UserRole) in old_selection)
         self.project_list.blockSignals(False);self.project_list.verticalScrollBar().setValue(scroll);self.show_detail();self.update_empty_state()
 
     def show_detail(self,*_):
+        selected_threads={i.data(Qt.UserRole) for i in self.thread_list.selectedItems()}
         self.folder_list.clear();self.thread_list.clear();self.detail_status.setText('');self.folder_size.setText('');self.confirm_links.hide();self.active_bundle=None
         self.bundle_action.setVisible(self.mode=='backups');self.proof_action.setVisible(self.mode=='backups');self.recovery_action.setVisible(self.mode=='recovery')
         self.assign_action.setVisible(self.mode=='unassigned')
@@ -255,7 +268,11 @@ class MainWindow(QMainWindow):
             item=self.project_list.currentItem()
             if item and self.mode=='unassigned':
                 tid=item.data(Qt.UserRole);t=next(t for t in self.snapshot.conversations if t.id==tid)
-                self.detail_title.setText(t.title);i=QListWidgetItem(t.title);i.setData(Qt.UserRole,tid);self.thread_list.addItem(i)
+                ids={i.data(Qt.UserRole) for i in self.project_list.selectedItems()} or {tid}
+                self.detail_title.setText(t.title if len(ids)==1 else f'대화 {len(ids)}개 선택')
+                for selected_thread in self.snapshot.conversations:
+                    if selected_thread.id in ids:
+                        i=QListWidgetItem(selected_thread.title);i.setData(Qt.UserRole,selected_thread.id);self.thread_list.addItem(i)
                 reason=self.membership.reasons.get(tid,'outside')
                 self.detail_status.setText({'ambiguous':'여러 프로젝트가 같은 폴더를 사용합니다. 연결할 프로젝트를 선택하세요.','projectless':'Codex에서 프로젝트 없는 대화로 지정됐습니다.','missing_project':'기록된 프로젝트를 현재 저장소에서 찾을 수 없습니다.','other_host':'다른 연결 호스트의 대화입니다.'}.get(reason,'현재 프로젝트 폴더와 맞는 경로가 없습니다. 옛 경로이거나 프로젝트가 제거됐을 수 있습니다.'))
             if item and self.mode=='backups':
@@ -271,6 +288,10 @@ class MainWindow(QMainWindow):
                     self.detail_status.setText('백업을 연결하거나 파일 상태를 확인하세요.\n'+str(exc))
                     self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False)
         self.detail_tabs.setTabText(0,f'대화 {self.thread_list.count()}');self.detail_tabs.setTabText(1,f'폴더 위치 {self.folder_list.count()}')
+        for n in range(self.thread_list.count()):
+            item=self.thread_list.item(n)
+            if item.data(Qt.UserRole) in selected_threads:item.setSelected(True)
+        self.sync_thread_actions()
 
     def run_job(self,title,func,done=None):
         if self.updater.requested:
@@ -543,12 +564,13 @@ class MainWindow(QMainWindow):
         item=self.project_list.currentItem()
         if not item: return
         operation_id=item.data(Qt.UserRole)
-        data=next(p for p in self.journal.pending() if p['id']==operation_id)
+        data=next(p for p in self.recovery_items() if p['id']==operation_id)
         recovery=data['payload'].get('recovery')
         events=self.journal.events(operation_id)
-        error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'작업이 중단됐습니다.')
+        error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'삭제한 항목을 복구할 수 있습니다.' if data['state']=='completed' else '작업이 중단됐습니다.')
         text='작업 상태: '+data['state']+'\n\n'+error+'\n\n'
-        if recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
+        if data['payload']['kind']=='rename-thread':text+='변경 전 대화 제목으로 되돌립니다.'
+        elif recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
         elif data['payload']['kind']=='connections': text+='이전 프로젝트 이름·폴더 연결·대화 소속을 복구합니다.'
         elif data['payload']['kind']=='export-cleanup': text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n정리 중 삭제된 대화와 파일을 백업에서 복구합니다. 남아 있는 대화와 변경된 파일은 보존합니다.'
         else: text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n중단된 가져오기를 이어서 검증합니다.'

@@ -39,7 +39,7 @@ def build_layout(w):
     for title,key,handler in [('옮기기','move',w.move),('합치기','merge',w.merge),('백업 만들기','backup',w.backup)]:
         button=QPushButton(title);button.clicked.connect(handler);buttons.addWidget(button);w.buttons[key]=button
     w.more=QPushButton('더 보기');w.more_menu=QMenu(w.more)
-    for title,key,handler in [('프로젝트 설정','links',w.connections),('백업 후 원본 정리','cleanup',w.export_cleanup)]:
+    for title,key,handler in [('이름 변경','rename',w.rename_selected_project),('프로젝트 설정','links',w.connections),('프로젝트 삭제','delete',w.delete_selected_project),('백업 후 원본 정리','cleanup',w.export_cleanup)]:
         action=w.more_menu.addAction(title,handler);w.buttons[key]=action
     w.more.setMenu(w.more_menu);buttons.addWidget(w.more);toolbar.addWidget(w.project_actions);toolbar.addStretch()
     w.sort=QComboBox();w.sort.addItems(['용량 큰 순','이름 순','용량 작은 순']);w.sort.setFixedWidth(120);w.sort.currentIndexChanged.connect(w.filter_list);toolbar.addWidget(w.sort)
@@ -49,6 +49,7 @@ def build_layout(w):
     center=QWidget();center_layout=QVBoxLayout(center);center_layout.setContentsMargins(0,0,0,0);center_layout.setSpacing(0)
     w.browser_stack=QStackedWidget();w.project_list=ProjectTable();w.project_list.currentItemChanged.connect(w.show_detail)
     w.project_list.itemDoubleClicked.connect(w.open_selected);w.project_list.customContextMenuRequested.connect(w.project_context_menu)
+    w.project_list.itemSelectionChanged.connect(lambda:w.show_detail() if w.mode=='unassigned' else None)
     w.browser_stack.addWidget(w.project_list);w.file_browser=FileBrowser();w.file_browser.back_to_projects.connect(w.show_projects);w.browser_stack.addWidget(w.file_browser)
     center_layout.addWidget(w.browser_stack,1);w.empty_state=label('불러오는 중입니다.','empty');w.empty_state.setAlignment(Qt.AlignCenter);center_layout.addWidget(w.empty_state)
     w.split.addWidget(center)
@@ -58,13 +59,22 @@ def build_layout(w):
     w.detail_tabs=QTabWidget();dl.addWidget(w.detail_tabs,1)
     w.thread_list=QListWidget();w.thread_list.setWordWrap(True);w.thread_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.thread_list.setSelectionMode(QAbstractItemView.ExtendedSelection);w.thread_list.itemDoubleClicked.connect(w.show_transcript)
     w.detail_tabs.addTab(w.thread_list,'대화')
+    w.thread_list.setContextMenuPolicy(Qt.CustomContextMenu);w.thread_list.customContextMenuRequested.connect(w.thread_context_menu)
     w.folder_list=QListWidget();w.folder_list.setWordWrap(True);w.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.folder_list.itemDoubleClicked.connect(w.open_root)
     w.detail_tabs.addTab(w.folder_list,'폴더 위치')
+    w.thread_manage=QPushButton('대화 관리');thread_menu=QMenu(w.thread_manage)
+    w.thread_rename=thread_menu.addAction('제목 변경…',lambda:w.rename_selected_thread())
+    thread_menu.addAction('프로젝트로 이동…',lambda:w.move_selected_threads())
+    thread_menu.addSeparator();thread_menu.addAction('선택한 대화 삭제…',lambda:w.delete_selected_threads())
+    w.thread_manage.setMenu(thread_menu);dl.addWidget(w.thread_manage);w.thread_list.itemSelectionChanged.connect(w.sync_thread_actions)
     w.detail_status=label('목록에서 프로젝트를 선택하면 대화와 폴더를 확인할 수 있습니다.');dl.addWidget(w.detail_status)
-    for attr,title,handler in [('bundle_action','이 백업 복원하기',w.restore),('proof_action','복원 상태 확인',w.verify_restore),('recovery_action','중단된 작업 복구',w.show_recovery),('assign_action','프로젝트 선택해서 분류',w.assign_unassigned),('confirm_links','대화 연결 확인',w.connect_folder_threads)]:
+    for attr,title,handler in [('bundle_action','이 백업 복원하기',w.restore),('proof_action','복원 상태 확인',w.verify_restore),('recovery_action','선택한 항목 복구',w.show_recovery),('assign_action','선택한 대화 프로젝트 이동',lambda:w.move_selected_threads(tuple(i.data(Qt.UserRole) for i in w.project_list.selectedItems()))),('confirm_links','대화 연결 확인',w.connect_folder_threads)]:
         button=QPushButton(title);button.clicked.connect(handler);button.hide();setattr(w,attr,button);dl.addWidget(button)
     w.split.addWidget(detail);w.split.setSizes([860,310]);w.split.setChildrenCollapsible(False)
     bottom=QHBoxLayout();w.size_status=label('');w.size_status.setWordWrap(False);bottom.addWidget(w.size_status);bottom.addStretch();w.help_button=QPushButton('사용 안내');w.help_button.clicked.connect(w.show_help);bottom.addWidget(w.help_button);content.addLayout(bottom)
     w.footer=label('프로젝트를 두 번 클릭하면 파일이 열립니다.');content.addWidget(w.footer)
     for sequence,callback in [('Ctrl+F',lambda:w.search.setFocus()),('F5',w.reload),('Alt+Left',w.navigate_back)]:
         action=QAction(w);action.setShortcut(QKeySequence(sequence));action.triggered.connect(callback);w.addAction(action)
+    for widget,rename,remove in [(w.project_list,lambda:w.rename_selected_project() if w.mode=='projects' else None,lambda:w.delete_selected_project() if w.mode=='projects' else None),(w.thread_list,lambda:w.rename_selected_thread(),lambda:w.delete_selected_threads())]:
+        for sequence,callback in [('F2',rename),('Delete',remove)]:
+            action=QAction(widget);action.setShortcut(QKeySequence(sequence));action.setShortcutContext(Qt.WidgetShortcut);action.triggered.connect(callback);widget.addAction(action)

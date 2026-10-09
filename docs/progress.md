@@ -89,3 +89,13 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Reviewed source screenshots at 1420x860 and 1060x680, including file browsing and empty states. Final packaged executable rendered the project table/detail pane and retained the approved logo.
 - Final packaged updater passed native replacement, v0.3.0 startup health, settings retention and unknown-file preservation. Public verification and local installation evidence are kept under .test-artifacts.
 - Actual user files/chats were not moved or deleted for testing. Physical second-PC and mobile continuation remain unverified.
+
+2026-10-09 Codex Manager v0.4.0 project and conversation management:
+- Added project display-name changes, conversation title changes, multi-selection membership moves, and explicit project/conversation deletion in context menus and the conversation management menu. F2/Delete open the corresponding prompts. Existing project merge remains available.
+- Project deletion previews the affected conversations, including descendants and inferred folder members. File deletion is unchecked by default; optional file cleanup requires a separately selected recovery location and rejects shared/protected paths.
+- Delete operations first verify conversation/file copies, compare fresh state against confirmed selection, record durable recovery intent, and use Codex RPCs. Completed deletion and interrupted work appear in recovery; modified restore targets/history are not overwritten.
+- Fixed reviewer-reproduced recovery failures involving stale legacy project records, stale thread assignments, interrupted import/title changes, and edited idempotently-created replacement projects. Fast UI snapshots are enriched before destructive work.
+- Full suite: 146 passed in 94.37 seconds. Real isolated RPC UI-menu acceptance covered project/thread rename, two-thread movement/deletion and recovery. Existing merge/export/import/continuation-fixture/cleanup acceptance passed.
+- Reviewed 1420x860 and 1060x680 source UI and the final packaged executable screenshot. Independent targeted re-review found no remaining blockers.
+- Final packaged updater verified v0.4.0 startup, installation path/PID, retained settings and unknown files; ready in 4.422 seconds, total 15.844 seconds in this isolated run. Public-release/local-install proof follows in local .test-artifacts reports.
+- Real user project files and conversations were not modified for QA. Other physical PCs and mobile remain unverified.
