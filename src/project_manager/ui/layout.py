@@ -44,17 +44,15 @@ def build_layout(w):
     for title,key,handler in [('이름 변경','rename',w.rename_selected_project),('프로젝트 설정','links',w.connections),('프로젝트 삭제','delete',w.delete_selected_project),('백업 후 원본 정리','cleanup',w.export_cleanup)]:
         action=w.more_menu.addAction(title,handler);w.buttons[key]=action
     w.more.setMenu(w.more_menu);buttons.addWidget(w.more);toolbar.addWidget(w.project_actions);toolbar.addStretch()
-    w.sort=QComboBox();w.sort.addItems(['용량 큰 순','이름 순','용량 작은 순']);w.sort.setFixedWidth(120);w.sort.currentIndexChanged.connect(w.filter_list);toolbar.addWidget(w.sort)
     filters=QHBoxLayout()
     w.chat_status=QComboBox();w.chat_status.addItems(['전체 대화','보관하지 않은 대화','보관된 대화']);w.chat_status.setToolTip('대화 표시 범위');w.chat_status.currentIndexChanged.connect(w.filter_list);filters.addWidget(w.chat_status)
-    w.chat_sort=QComboBox();w.chat_sort.addItems(['최근 작업 순','제목 순','프로젝트 순']);w.chat_sort.currentIndexChanged.connect(w.filter_list);filters.addWidget(w.chat_sort)
     w.import_button=QPushButton('백업 가져오기');w.import_button.clicked.connect(w.open_backup);toolbar.addWidget(w.import_button);content.addLayout(toolbar);filters.addStretch();content.addLayout(filters)
     w.move_button=w.buttons['move'];w.cleanup_button=w.buttons['cleanup']
     w.split=QSplitter(Qt.Horizontal);w.split.setHandleWidth(16);content.addWidget(w.split,1)
     center=QWidget();center.setObjectName('browserPanel');panel_shadow(center);center_layout=QVBoxLayout(center);center_layout.setContentsMargins(12,14,12,14);center_layout.setSpacing(0)
     w.browser_stack=QStackedWidget();w.project_list=ProjectTable();w.project_list.currentItemChanged.connect(w.show_detail)
     w.project_list.itemDoubleClicked.connect(w.open_selected);w.project_list.customContextMenuRequested.connect(w.project_context_menu)
-    w.project_list.itemSelectionChanged.connect(lambda:w.show_detail() if w.mode in ('unassigned','conversations') else None)
+    w.project_list.itemSelectionChanged.connect(lambda:w.show_detail() if w.mode in ('projects','unassigned','conversations') else None)
     w.browser_stack.addWidget(w.project_list);w.file_browser=FileBrowser();w.file_browser.back_to_projects.connect(w.show_projects);w.browser_stack.addWidget(w.file_browser)
     center_layout.addWidget(w.browser_stack,1);w.empty_state=label('불러오는 중입니다.','empty');w.empty_state.setAlignment(Qt.AlignCenter);center_layout.addWidget(w.empty_state)
     w.split.addWidget(center)
@@ -63,7 +61,8 @@ def build_layout(w):
     w.folder_size=label('');dl.addWidget(w.folder_size)
     w.thread_search=QLineEdit();w.thread_search.setPlaceholderText('이 프로젝트의 대화 찾기');w.thread_search.setClearButtonEnabled(True);w.thread_search.textChanged.connect(w.show_detail);dl.addWidget(w.thread_search)
     w.detail_tabs=QTabWidget();w.detail_tabs.setMinimumHeight(140);dl.addWidget(w.detail_tabs,1)
-    w.thread_list=QListWidget();w.thread_list.setWordWrap(True);w.thread_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.thread_list.setSelectionMode(QAbstractItemView.ExtendedSelection);w.thread_list.itemDoubleClicked.connect(w.show_transcript)
+    from .dragdrop import ChatDragList
+    w.thread_list=ChatDragList();w.thread_list.setWordWrap(True);w.thread_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.thread_list.setSelectionMode(QAbstractItemView.ExtendedSelection);w.thread_list.itemDoubleClicked.connect(w.show_transcript)
     w.detail_tabs.addTab(w.thread_list,'대화')
     w.thread_list.setContextMenuPolicy(Qt.CustomContextMenu);w.thread_list.customContextMenuRequested.connect(w.thread_context_menu)
     w.folder_list=QListWidget();w.folder_list.setWordWrap(True);w.folder_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.folder_list.itemDoubleClicked.connect(w.open_root)
@@ -86,4 +85,9 @@ def build_layout(w):
         action=QAction(w);action.setShortcut(QKeySequence(sequence));action.triggered.connect(callback);w.addAction(action)
     from .shortcuts import Shortcuts
     w.shortcuts=Shortcuts(w)
+    from .sorting import HeaderSort
+    w.column_sort=HeaderSort(w)
     keys=QPushButton('단축키');keys.clicked.connect(w.shortcuts.help);bottom.addWidget(keys)
+
+    from .dragdrop import DragDrop
+    w.dragdrop=DragDrop(w)

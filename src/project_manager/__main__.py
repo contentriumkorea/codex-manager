@@ -14,7 +14,7 @@ from .settings import read_settings
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--home',type=Path)
-    parser.add_argument('--state-dir',type=Path,default=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'ProjectConversationManager')
+    parser.add_argument('--state-dir','-s',type=Path,default=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'ProjectConversationManager')
     parser.add_argument('--screenshot',type=Path)
     parser.add_argument('--no-update-check',action='store_true')
     parser.add_argument('--update-health',type=Path)
@@ -42,12 +42,20 @@ def main():
         window=MainWindow(CodexAdapter(args.home),args.state_dir,auto_refresh=not args.screenshot,start_update_check=not args.no_update_check)
     except Exception as exc:
         QMessageBox.critical(None,APP_NAME,'프로그램을 시작하지 못했습니다. 설정 폴더와 파일 상태를 확인하세요.\n'+str(exc));return 1
+    taskbar_registered=False;taskbar_error=None
     window.show()
+    if sys.platform=='win32' and getattr(sys,'frozen',False):
+        from .windows_shell import register_window,clear_window
+        try:
+            hwnd=int(window.winId())
+            taskbar_registered=register_window(hwnd,Path(sys.executable),Path(__file__).parent/'ui/app-icon.ico',args.state_dir)
+            window.taskbar_cleanup=lambda:clear_window(hwnd)
+        except OSError as exc:taskbar_error=str(exc)
     if args.update_health:
         from .bundles import write_json
         from PySide6.QtCore import QTimer
         if not args.update_health.resolve().is_relative_to((args.state_dir/'updates').resolve()): raise ValueError('올바른 업데이트 확인 경로가 아닙니다.')
-        QTimer.singleShot(500,lambda:write_json(args.update_health,{'version':VERSION,'install_dir':str(Path(sys.executable).parent.resolve()),'pid':os.getpid()}))
+        QTimer.singleShot(500,lambda:write_json(args.update_health,{'version':VERSION,'install_dir':str(Path(sys.executable).parent.resolve()),'pid':os.getpid(),'taskbar_registered':taskbar_registered,'taskbar_error':taskbar_error}))
     if args.screenshot:
         window.refresh(window.adapter.snapshot(include_runtime=False));window.project_list.setCurrentRow(0)
         from PySide6.QtCore import QTimer

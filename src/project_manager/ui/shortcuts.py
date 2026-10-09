@@ -49,10 +49,10 @@ class Shortcuts(QObject):
             mime.setUrls([QUrl.fromLocalFile(str(p)) for p in paths]);mime.setText('\n'.join(map(str,paths)))
             if cut:payload={'kind':'files','paths':paths}
         elif view==w.project_list and w.mode=='projects':
-            p=w.selected_project()
-            if not p:return
-            mime.setText(p.name+'\n'+'\n'.join(map(str,p.roots)))
-            if cut:payload={'kind':'project','project':p}
+            projects=w.selected_projects()
+            if not projects:return
+            mime.setText('\n\n'.join(p.name+'\n'+'\n'.join(map(str,p.roots)) for p in projects))
+            if cut:payload={'kind':'projects','projects':projects}
         else:
             ids=self.ids(view)
             if not ids:return
@@ -81,22 +81,19 @@ class Shortcuts(QObject):
                 if result.state=='completed' and self.cut is clip:self.cancel_cut()
                 w.show_result(result)
             w.run_job('대화 붙여넣기',lambda worker:move_threads(w.adapter,clip['threads'],p.id,w.journal),done);return
-        if clip and clip['kind']=='project':
-            source=clip['project'];target=w.selected_project()
-            if target and target.id==source.id:
-                QMessageBox.information(w,'붙여넣기','다른 대상 프로젝트를 선택하세요.');return
+        if clip and clip['kind']=='projects':
+            sources=clip['projects'];target=w.selected_project();ids={p.id for p in sources}
+            if target and target.id in ids:target=None
             if not target:
-                d=ProjectPicker(w,[p for p in w.snapshot.projects if p.id!=source.id],'프로젝트 붙여넣기','다음 단계에서 파일·대화 병합 경로와 원본 정리 여부를 확인합니다.')
+                candidates=[p for p in w.snapshot.projects if p.id not in ids and p.roots]
+                if not candidates:return
+                d=ProjectPicker(w,candidates,'프로젝트 붙여넣기','선택한 프로젝트들을 합칠 대상을 선택하세요.')
                 if d.exec()!=QDialog.Accepted:return
-                target=next(p for p in w.snapshot.projects if p.id==d.project_id())
-            if not target.roots or not w.guard_change():return
-            import re
-            safe=re.sub(r'[<>:"/\\|?*]','_',source.name).strip('. ') or 'project'
-            destinations={str(r):target.roots[0]/safe/(r.name if len(source.roots)>1 else '') for r in source.roots}
+                target=next(p for p in candidates if p.id==d.project_id())
             def done(result):
                 if result.state=='completed' and self.cut is clip:self.cancel_cut()
                 w.show_result(result)
-            w.start_transfer(source,destinations,target,done=done);return
+            w.transfer_projects(sources,target=target,done=done);return
         mime=QApplication.clipboard().mimeData()
         paths=clip['paths'] if clip and clip['kind']=='files' else tuple(Path(u.toLocalFile()) for u in mime.urls() if u.isLocalFile())
         if not paths:return

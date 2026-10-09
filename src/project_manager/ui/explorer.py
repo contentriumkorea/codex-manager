@@ -16,7 +16,9 @@ class BrowserItem(QTreeWidgetItem):
     def setToolTip(self,*args):super().setToolTip(*( (0,*args) if len(args)==1 else args))
 
 
-class ProjectTable(QTreeWidget):
+from .dragdrop import DragSource,FileDragView
+
+class ProjectTable(DragSource,QTreeWidget):
     def __init__(self):
         super().__init__();self.setRootIsDecorated(False);self.setUniformRowHeights(True)
         self.setAlternatingRowColors(False);self.setFrameShape(QTreeWidget.NoFrame)
@@ -25,6 +27,8 @@ class ProjectTable(QTreeWidget):
         self.setTextElideMode(Qt.ElideMiddle)
         self.configure(['이름','폴더 위치','대화','용량'])
     def configure(self,labels):
+        if getattr(self,'_labels',None)==labels:return
+        self._labels=list(labels)
         self.setColumnCount(len(labels));self.setHeaderLabels(labels)
         for col in range(len(labels)):self.header().setSectionResizeMode(col,QHeaderView.Interactive)
         self.header().setStretchLastSection(True);self.setColumnWidth(0,220)
@@ -62,7 +66,7 @@ class FileBrowser(QWidget):
         self.reveal=QPushButton('탐색기에서 열기');self.reveal.clicked.connect(self.reveal_current);bar.addWidget(self.reveal);layout.addLayout(bar)
         self.root_picker=QComboBox();self.root_picker.currentIndexChanged.connect(self.choose_root);layout.addWidget(self.root_picker)
         self.model=ProjectFiles(self);self.model.setReadOnly(True)
-        self.view=QTreeView();self.view.setModel(self.model);self.view.setRootIsDecorated(False);self.view.setUniformRowHeights(True)
+        self.view=FileDragView();self.view.setModel(self.model);self.view.setRootIsDecorated(False);self.view.setUniformRowHeights(True)
         self.view.setEditTriggers(QAbstractItemView.NoEditTriggers);self.view.setSelectionBehavior(QAbstractItemView.SelectRows);self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.view.setSortingEnabled(True);self.view.sortByColumn(0,Qt.AscendingOrder);self.view.setAlternatingRowColors(False)
         self.view.setColumnWidth(0,280);self.view.setColumnWidth(1,95);self.view.setColumnWidth(2,110)

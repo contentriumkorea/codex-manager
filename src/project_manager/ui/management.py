@@ -82,6 +82,8 @@ class ManagementActions:
 
     def delete_selected_project(self):
         project=self.selected_project()
+        if len(self.selected_projects())>1:
+            QMessageBox.information(self,'프로젝트 선택','이 작업은 프로젝트 하나를 선택하세요. 여러 프로젝트 이동·합치기는 함께 처리할 수 있습니다.');return
         if not project or not self.guard_change():return
         try:plan=plan_delete(self.snapshot,project_id=project.id,inferred=tuple(t.id for t in self.folder_threads(project.id)))
         except ValueError as exc:QMessageBox.warning(self,'삭제 확인',str(exc));return
@@ -124,7 +126,7 @@ class ManagementActions:
         self.thread_rename.setEnabled(count>0)
         self.thread_rename.setText('제목 변경…' if count<2 else '제목 일괄 변경…')
         self.rename_chat_button.setEnabled(count>0);self.rename_chat_button.setText('제목 변경' if count<2 else f'제목 변경 ({count})')
-        self.selection_status.setText(f'{self.project_list.count():,}개 표시 · {len(self.project_list.selectedItems()):,}개 선택' if self.mode in ('unassigned','conversations') else f'대화 {self.thread_list.count():,}개 · {count:,}개 선택')
+        self.selection_status.setText(f'{self.project_list.count():,}개 표시 · {len(self.project_list.selectedItems()):,}개 선택' if self.mode in ('unassigned','conversations') else f'프로젝트 {len(self.selected_projects())}개 선택 · 대화 {count:,}개 선택')
         self.thread_manage.setText('대화 관리');self.thread_manage.setToolTip(f'선택한 대화 {count}개: 이동·복사·삭제')
 
     def recovery_items(self):
