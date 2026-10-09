@@ -82,3 +82,16 @@ def test_backup_finishes_in_selected_backup_with_restore_available(qtbot,tmp_pat
     assert w.mode=='backups' and w.active_bundle==w.backups[-1] and w.bundle_action.isEnabled()
     assert (root/'note.txt').read_text()=='keep original'
     qtbot.waitUntil(lambda:w.size_scanner.worker is None,timeout=3000)
+
+
+def test_unassigned_internal_records_are_optional_and_retained(qtbot,tmp_path):
+    from dataclasses import replace
+    w=MainWindow(CodexAdapter(tmp_path/'h',isolated=True),tmp_path/'s',auto_refresh=False);qtbot.addWidget(w)
+    t=Conversation('user',None,tmp_path,(),False,None,'',False,'User')
+    internal=replace(t,id='internal',title='Guardian review',internal=True)
+    w.refresh(Snapshot((),(t,internal),''));w.set_mode('unassigned')
+    assert w.project_list.count()==1
+    w.show_internal.setChecked(True)
+    assert w.project_list.count()==2 and len(w.snapshot.conversations)==2
+    w.show_internal.setChecked(False)
+    assert w.project_list.count()==1

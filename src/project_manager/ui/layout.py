@@ -3,7 +3,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt,QSize
 from PySide6.QtGui import QIcon,QAction,QKeySequence
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QLineEdit,
-    QComboBox,QSplitter,QStackedWidget,QTabWidget,QListWidget,QAbstractItemView,QMenu)
+    QCheckBox,QComboBox,QSplitter,QStackedWidget,QTabWidget,QListWidget,QAbstractItemView,QMenu)
 from .explorer import ProjectTable,FileBrowser
 from ..version import APP_NAME,VERSION
 from .appearance import GlassBackdrop,panel_shadow
@@ -32,6 +32,7 @@ def build_layout(w):
     content=QVBoxLayout();content.setContentsMargins(0,7,0,0);content.setSpacing(14);outer.addLayout(content,1)
     top=QHBoxLayout();w.home_button=QPushButton('프로젝트');w.home_button.setObjectName('crumb');w.home_button.clicked.connect(w.show_projects);top.addWidget(w.home_button)
     w.heading=label('모든 프로젝트','heading');top.addWidget(w.heading);top.addStretch()
+    w.show_internal=QCheckBox('내부 작업 기록 포함');w.show_internal.setToolTip('보조 에이전트와 자동 검토 기록도 표시합니다. 백업에는 항상 포함됩니다.');w.show_internal.toggled.connect(w.filter_list);top.addWidget(w.show_internal)
     w.search=QLineEdit();w.search.setPlaceholderText('이름, 폴더, 대화 검색');w.search.setClearButtonEnabled(True);w.search.setMaximumWidth(250);w.search.textChanged.connect(w.filter_list);top.addWidget(w.search)
     refresh=QPushButton('새로고침');refresh.clicked.connect(w.reload);top.addWidget(refresh);content.addLayout(top)
     w.subtitle=label('프로젝트를 두 번 클릭해 파일을 살펴보세요.');content.addWidget(w.subtitle)

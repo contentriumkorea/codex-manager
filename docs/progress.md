@@ -107,3 +107,12 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Existing UI theme assertion now verifies the rendered light background and effective dark text. Full suite: 146 passed in 99.60 seconds; independent review found no release blocker.
 - Visually inspected source overview/files at 1420x860 and 1060x680, empty states, menu, rename, delete and update dialogs. Inspected the final packaged main window and a frozen production update dialog, including its check-mark resource.
 - Native packaged updater passed replacement/startup/version/path/PID health and preservation of settings/unknown user files (15.906 seconds in this isolated run). Single-click update proof and public/local deployment reports are under .test-artifacts.
+
+
+2026-10-09 Codex Manager v0.5.1 membership display fix:
+- Identify subagent and guardian records from stored metadata; preserve all records for backups.
+- Resolve recorded parent membership before child grouping, including moved folders and cycle guards. Ordinary ambiguous membership and explicit opt-outs remain conservative.
+- Hide internal records in ordinary lists by default; add an explicit include toggle and parent-based labels.
+- Read-only local diagnosis resolved 18 stale-folder conflicts without modifying Codex state.
+- 152 tests passed; isolated merge/import/restore workflow passed; packaged update startup verified.
+- Physical second-PC and mobile synchronization were not exercised.

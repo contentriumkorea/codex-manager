@@ -117,6 +117,13 @@ def read_catalog(home: Path, include_runtime=True,sqlite_home=None) -> Snapshot:
             parents={r[1]:r[0] for r in db.execute('select parent_thread_id,child_thread_id from thread_spawn_edges')}
         for row in db.execute('select * from threads order by updated_at desc'):
             r=dict(row)
+            try: source=json.loads(r.get('source') or '{}')
+            except (ValueError,TypeError): source={}
+            subagent=source.get('subagent') if isinstance(source,dict) else None
+            internal=isinstance(subagent,dict) or r.get('thread_source') in ('subagent','guardian_review')
+            spawn=subagent.get('thread_spawn',{}) if isinstance(subagent,dict) else {}
+            recorded_parent=spawn.get('parent_thread_id') if isinstance(spawn,dict) else None
+            parent=parents.get(r['id']) or (recorded_parent if isinstance(recorded_parent,str) else None)
             assignment=state.get('thread-project-assignments',{}).get(r['id'],{})
             pid=r.get('project_id')
             if pid is None and assignment.get('projectKind')=='local':
@@ -129,8 +136,8 @@ def read_catalog(home: Path, include_runtime=True,sqlite_home=None) -> Snapshot:
                 except (ValueError,OSError): pass
             revision=f"{r.get('updated_at_ms',r.get('updated_at',0))}:{path.stat().st_size if path and path.exists() else 0}"
             attachments=tuple(dict(x) for x in db.execute('select * from thread_attachments where thread_id=?',(r['id'],))) if include_runtime and 'thread_attachments' in tables else ()
-            conversations.append(Conversation(r['id'],pid,clean_path(r['cwd']),runtime,bool(r['archived']),parents.get(r['id']),revision,False,r.get('name') or r.get('title') or r['id'],path,r.get('updated_at',0),attachments))
+            conversations.append(Conversation(r['id'],pid,clean_path(r['cwd']),runtime,bool(r['archived']),parent,revision,False,r.get('name') or r.get('title') or r['id'],path,r.get('updated_at',0),attachments,internal))
         db.close()
     serialized=json.dumps({'p':[(p.id,p.name,[str(x) for x in p.roots]) for p in projects.values()],
-                           't':[(t.id,t.project_id,t.revision,str(t.cwd),[str(p) for p in t.runtime_roots],t.parent_id,t.attachments) for t in conversations]},sort_keys=True)
+                           't':[(t.id,t.project_id,t.revision,str(t.cwd),[str(p) for p in t.runtime_roots],t.parent_id,t.attachments,t.internal) for t in conversations]},sort_keys=True)
     return Snapshot(tuple(projects.values()),tuple(conversations),hashlib.sha256(serialized.encode()).hexdigest())

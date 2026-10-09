@@ -22,6 +22,7 @@ def display_membership(snapshot,state):
     projectless=set(projectless) if isinstance(projectless,list) else set()
     hosts=state.get('thread-project-membership-host-ids',{})
     hosts=hosts if isinstance(hosts,dict) else {}
+    known={t.id for t in snapshot.conversations}
     for t in snapshot.conversations:
         if t.project_id is not None:
             projects[t.id]=t.project_id if t.project_id in valid else None
@@ -29,6 +30,10 @@ def display_membership(snapshot,state):
         projects[t.id]=None
         if t.id in projectless:reasons[t.id]='projectless';continue
         if hosts.get(t.id,'local')!='local':reasons[t.id]='other_host';continue
+        # A spawned agent belongs to its recorded parent even after that parent moves.
+        # This is display-only; the original project_id and operation safeguards stay intact.
+        if t.internal and t.parent_id in known:
+            reasons[t.id]='internal_parent';continue
         cwd=path_key(t.cwd)
         matches=[(len(root),pid) for root,pid in roots if cwd==root or cwd.startswith(root+'\\')]
         if matches:
@@ -37,15 +42,25 @@ def display_membership(snapshot,state):
                 projects[t.id]=inferred[t.id]=pids.pop();reasons[t.id]='folder';continue
             reasons[t.id]='ambiguous'
         else:reasons[t.id]='outside'
-    # Conflicting parent and folder evidence needs a choice rather than a guessed assignment.
-    # Worktree children can have a different cwd; the recorded parent supplies display grouping.
-    while True:
-        changed=False
-        for t in snapshot.conversations:
-            parent=projects.get(t.parent_id)
-            if t.id in inferred and parent and parent!=projects[t.id]:
-                projects[t.id]=None;inferred.pop(t.id);reasons[t.id]='ambiguous';changed=True
-            if projects[t.id] is None and reasons[t.id]=='outside' and projects.get(t.parent_id):
-                projects[t.id]=inferred[t.id]=projects[t.parent_id];reasons[t.id]='parent';changed=True
-        if not changed:break
+    # Resolve parents before children so provisional folder matches never leak into
+    # descendant memberships. An explicit stack also handles deep trees and cycles.
+    threads={t.id:t for t in snapshot.conversations}
+    resolved={tid for tid,reason in reasons.items() if reason not in ('folder','outside','internal_parent')}
+    for start in threads:
+        chain=[];positions={};tid=start
+        while tid in threads and tid not in resolved:
+            if tid in positions:
+                for cyclic in chain[positions[tid]:]:
+                    projects[cyclic]=None;inferred.pop(cyclic,None)
+                    reasons[cyclic]='ambiguous';resolved.add(cyclic)
+                break
+            positions[tid]=len(chain);chain.append(tid);tid=threads[tid].parent_id
+        for tid in reversed(chain):
+            if tid in resolved:continue
+            t=threads[tid];parent=projects.get(t.parent_id)
+            if not t.internal and tid in inferred and parent and parent!=projects[tid]:
+                projects[tid]=None;inferred.pop(tid);reasons[tid]='ambiguous'
+            elif projects[tid] is None and reasons[tid] in ('outside','internal_parent') and parent:
+                projects[tid]=inferred[tid]=parent;reasons[tid]='parent'
+            resolved.add(tid)
     return DisplayMembership(projects,inferred,reasons)

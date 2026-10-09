@@ -24,6 +24,7 @@ class Conversation:
     rollout: Path|None = None
     updated_at: int = 0
     attachments: tuple[dict,...] = ()
+    internal: bool = False
 
 
 @dataclass(frozen=True)

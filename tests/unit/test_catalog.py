@@ -71,3 +71,15 @@ def test_copied_home_uses_recorded_old_home_mapping_without_duplicate_projects(t
     (tmp_path/'.codex-global-state.json').write_text(json.dumps({'local-projects':{'legacy':{'name':'P','rootPaths':[str(tmp_path/'files')]}},'thread-project-assignments':{'t':{'projectId':'legacy','projectKind':'local'}},'app-server-project-id-by-legacy-project-id-by-host':{'local:C:\\old-home':{'legacy':'canonical'}}}))
     s=read_catalog(tmp_path)
     assert len(s.projects)==1 and s.conversations[0].project_id=='canonical'
+
+
+def test_catalog_marks_internal_records_and_uses_recorded_parent(tmp_path):
+    c=sqlite3.connect(tmp_path/'state_5.sqlite')
+    c.executescript('CREATE TABLE threads(id,title,cwd,project_id,rollout_path,archived,updated_at,source,thread_source);')
+    for tid,source,kind in [('user','vscode','user'),('review',json.dumps({'subagent':{'other':'guardian'}}),None),('child',json.dumps({'subagent':{'thread_spawn':{'parent_thread_id':'user'}}}),'subagent')]:
+        c.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?)',(tid,tid,str(tmp_path),None,'missing',0,1,source,kind))
+    c.commit();c.close()
+    ts={t.id:t for t in read_catalog(tmp_path,False).conversations}
+    assert not ts['user'].internal
+    assert ts['review'].internal and ts['child'].internal
+    assert ts['child'].parent_id=='user'

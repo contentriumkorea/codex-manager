@@ -53,7 +53,7 @@ def external_child_bundle(tmp_path, external_kind):
         'id': tid, 'cwd': str(cwd), 'runtime_workspace_roots': [str(p) for p in runtime]
     }}) + '\n', encoding='utf-8')
     child = replace(parent, id=tid, project_id=None, parent_id=parent.id,
-                    cwd=cwd, runtime_roots=runtime, rollout=raw)
+                    cwd=cwd, runtime_roots=runtime, rollout=raw, internal=True)
     adapter.threads.append(child)
     snapshot = adapter.snapshot()
     membership = display_membership(snapshot, {})
