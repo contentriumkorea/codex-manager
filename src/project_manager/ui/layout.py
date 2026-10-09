@@ -84,6 +84,6 @@ def build_layout(w):
     w.footer=label('프로젝트를 두 번 클릭하면 파일이 열립니다.');content.addWidget(w.footer)
     for sequence,callback in [('Ctrl+F',lambda:w.search.setFocus()),('F5',w.reload),('Alt+Left',w.navigate_back)]:
         action=QAction(w);action.setShortcut(QKeySequence(sequence));action.triggered.connect(callback);w.addAction(action)
-    for widget,rename,remove in [(w.project_list,w.rename_current,w.delete_current),(w.thread_list,lambda:w.rename_selected_thread(tuple(i.data(Qt.UserRole) for i in w.thread_list.selectedItems())),lambda:w.delete_selected_threads(tuple(i.data(Qt.UserRole) for i in w.thread_list.selectedItems())))]:
-        for sequence,callback in [('F2',rename),('Delete',remove)]:
-            action=QAction(widget);action.setShortcut(QKeySequence(sequence));action.setShortcutContext(Qt.WidgetShortcut);action.triggered.connect(callback);widget.addAction(action)
+    from .shortcuts import Shortcuts
+    w.shortcuts=Shortcuts(w)
+    keys=QPushButton('단축키');keys.clicked.connect(w.shortcuts.help);bottom.addWidget(keys)

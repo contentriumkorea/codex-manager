@@ -181,6 +181,7 @@ class MainWindow(ManagementActions,QMainWindow):
             menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(next(t.cwd for t in self.snapshot.conversations if t.id==preview.data(Qt.UserRole)))))
             menu.addAction(f'대화 삭제… ({len(ids)}개)',lambda:self.delete_selected_threads(ids))
         else:menu.addAction('중단된 작업 복구…',self.show_recovery)
+        self.shortcuts.add_menu(menu,self.project_list)
         menu.exec(self.project_list.viewport().mapToGlobal(point))
 
     def show_help(self):
@@ -237,7 +238,7 @@ class MainWindow(ManagementActions,QMainWindow):
             self.project_list.configure(['작업','작업 번호'])
             for operation in self.recovery_items():
                 if query and query not in (operation['payload'].get('kind','작업')+' '+operation['id']).lower():continue
-                title=('제목 변경 되돌리기 · '+operation['payload'].get('label',operation['payload'].get('new_name',''))) if operation['payload'].get('kind') in ('rename-thread','rename-threads') else ('삭제 복구 · '+operation['payload'].get('label','')) if operation['payload'].get('kind')=='management-delete' else operation['payload'].get('kind','작업')+' · '+operation['state']
+                title=(operation['payload'].get('label','파일 작업')+' · 되돌리기') if operation['payload'].get('kind')=='file-edit' else '프로젝트·대화 연결 되돌리기' if operation['payload'].get('kind')=='connections' and operation['state']=='completed' else ('제목 변경 되돌리기 · '+operation['payload'].get('label',operation['payload'].get('new_name',''))) if operation['payload'].get('kind') in ('rename-thread','rename-threads') else ('삭제 복구 · '+operation['payload'].get('label','')) if operation['payload'].get('kind')=='management-delete' else operation['payload'].get('kind','작업')+' · '+operation['state']
                 item=QListWidgetItem(title+'\n'+operation['id']);item.setData(Qt.UserRole,operation['id']);self.project_list.addItem(item)
         if old is not None and self.project_list.currentItem() is None:
             for n in range(self.project_list.count()):
@@ -537,7 +538,7 @@ class MainWindow(ManagementActions,QMainWindow):
         destinations={str(r):target.roots[0]/safe/(r.name if len(p.roots)>1 else '') for r in p.roots}
         self.start_transfer(p,destinations,target)
 
-    def start_transfer(self,p,destinations,target=None):
+    def start_transfer(self,p,destinations,target=None,done=None):
         text=p.name+(' → '+target.name if target else '')+'\n\n'
         text+='\n\n'.join(old+'\n→ '+str(new) for old,new in destinations.items())
         text+='\n\n대화의 소속과 현재 작업 경로를 함께 변경합니다.\n파일 복사와 연결을 다시 검증한 뒤 선택한 원본을 정리합니다.'
@@ -547,7 +548,7 @@ class MainWindow(ManagementActions,QMainWindow):
         if clean is None: return
         recovery=(target.roots[0].parent if target else next(iter(destinations.values())).parent)/'.project-manager-recovery'
         from .flows import transfer_with_connections
-        self.run_job('프로젝트를 옮기는 중' if not target else '프로젝트를 합치는 중',lambda w:transfer_with_connections(self.adapter,p,destinations,self.journal,recovery,target,clean,inferred,w.progress.emit,w.cancelled.is_set),self.show_result)
+        self.run_job('프로젝트를 옮기는 중' if not target else '프로젝트를 합치는 중',lambda w:transfer_with_connections(self.adapter,p,destinations,self.journal,recovery,target,clean,inferred,w.progress.emit,w.cancelled.is_set),done or self.show_result)
 
     def connections(self):
         p=self.selected_project()
@@ -606,12 +607,14 @@ class MainWindow(ManagementActions,QMainWindow):
         events=self.journal.events(operation_id)
         error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'이전 상태로 되돌릴 수 있습니다.' if data['state']=='completed' else '작업이 중단됐습니다.')
         text='작업 상태: '+data['state']+'\n\n'+error+'\n\n'
-        if data['payload']['kind'] in ('rename-thread','rename-threads'):text+='변경 전 대화 제목으로 되돌립니다.'
+        if data['payload']['kind']=='file-edit':text+=data['payload'].get('label','파일 작업')+'을 되돌립니다. 이후 변경된 파일은 덮어쓰지 않습니다.'
+        elif data['payload']['kind'] in ('rename-thread','rename-threads'):text+='변경 전 대화 제목으로 되돌립니다.'
         elif recovery: text+='복구 사본\n'+recovery+'\n\n이전 위치와 연결을 복구합니다. 대상의 새 파일은 덮어쓰지 않습니다.'
         elif data['payload']['kind']=='connections': text+='이전 프로젝트 이름·폴더 연결·대화 소속을 복구합니다.'
         elif data['payload']['kind']=='export-cleanup': text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n정리 중 삭제된 대화와 파일을 백업에서 복구합니다. 남아 있는 대화와 변경된 파일은 보존합니다.'
         else: text+='백업 위치\n'+data['payload'].get('bundle','')+'\n\n중단된 가져오기를 이어서 검증합니다.'
-        if not confirm(self,'작업 복구',text) or not self.guard_change(): return
+        if not confirm(self,'작업 복구',text):return
+        if data['payload']['kind']!='file-edit' and not self.guard_change(): return
         bundle_override=None
         if data['payload']['kind'] in ('import','export-cleanup'):
             selected=QFileDialog.getExistingDirectory(self,'중단된 작업의 백업 폴더 선택',data['payload'].get('bundle',''))

@@ -28,7 +28,7 @@ def change_connections(adapter,project,assignments,journal):
     if any(pid is not None and pid not in known_projects for pid in assignments.values()): raise ValueError('대상 프로젝트가 없습니다.')
     old={tid:threads[tid].project_id for tid in assignments};operation_id=uuid.uuid4().hex
     journal.begin(operation_id,{'kind':'connections','home':str(adapter.home),'resources':list({project.id,*[p for p in assignments.values() if p],*[p for p in old.values() if p]}),
-                                'project':asdict(original),'assignments':old})
+                                'project':asdict(original),'assignments':old,'expected_project':asdict(project),'expected_assignments':assignments})
     try:
         journal.record(operation_id,'relinking',{})
         adapter.update_project(project)
@@ -216,16 +216,29 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
 
 
 def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundle_override=None):
-    adapter.ensure_write_allowed()
     operation=journal.operation(operation_id)
     if not operation: raise ValueError('복구할 작업을 찾을 수 없습니다.')
+    if operation['payload']['kind']=='file-edit':
+        if Path(operation['payload']['home']).resolve()!=adapter.home.resolve():raise ValueError('작업한 저장소를 선택하세요.')
+        from .file_edits import undo_files
+        return undo_files(operation,journal)
+    adapter.ensure_write_allowed()
     if operation['payload']['kind'] in ('management-delete','rename-thread','rename-threads'):
         from .management import recover_management
         return recover_management(operation,adapter,journal)
-    if operation['state']=='completed': return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지')
+    if operation['state']=='completed' and not (operation['payload']['kind']=='connections' and 'expected_project' in operation['payload']): return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지')
     payload=operation['payload']
     if Path(payload['home']).resolve()!=adapter.home.resolve(): raise ValueError('작업을 시작한 Codex 저장소를 선택하세요: '+payload['home'])
     if payload['kind']=='connections':
+        if any(e['payload'].get('recovered') for e in journal.events(operation_id)):
+            return OperationResult('completed','파일 유지','이미 복구했습니다.','파일 유지')
+        if 'expected_project' in payload:
+            snap=adapter.snapshot();current=next((p for p in snap.projects if p.id==payload['project']['id']),None)
+            encoded=json.loads(json.dumps(asdict(current),default=str)) if current else None
+            if encoded not in (payload['expected_project'],payload['project']):raise ValueError('프로젝트가 이후 변경됐습니다. 현재 상태는 덮어쓰지 않습니다.')
+            threads={t.id:t for t in snap.conversations}
+            if any(tid not in threads or threads[tid].running or threads[tid].project_id not in (old,payload['expected_assignments'][tid]) for tid,old in payload['assignments'].items()):
+                raise ValueError('대화 연결이 이후 변경됐습니다. 현재 연결은 덮어쓰지 않습니다.')
         p=payload['project'];original=Project(p['id'],p['name'],tuple(clean_path(x) for x in p['roots']),tuple(p.get('legacy_ids',[])))
         adapter.update_project(original)
         for tid,pid in payload['assignments'].items(): adapter.assign_conversation(tid,pid)

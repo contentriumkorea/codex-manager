@@ -217,3 +217,16 @@ def test_batch_partial_failure_can_restore_and_rejects_later_edits(tmp_path,monk
     original(a,ts[1].id,ts[1].title)
     assert management.recover_management(op,a,j).state=='completed'
     assert {t.id:t.title for t in a.snapshot().conversations}=={t.id:t.title for t in ts}
+
+
+def test_completed_project_rename_and_chat_move_can_undo(tmp_path):
+    from project_manager.operations import recover_operation
+    a,p,tid,j=setup(tmp_path);q,other=make_project(a,tmp_path/'B','B')
+    assert management.rename_project(a,p,'Changed',j).state=='completed'
+    op=j.restorable()[0]
+    assert recover_operation(op['id'],a,j).state=='completed'
+    assert next(x for x in a.snapshot().projects if x.id==p.id).name==p.name
+    t=next(t for t in a.snapshot().conversations if t.id==tid)
+    assert management.move_threads(a,(t,),q.id,j).state=='completed'
+    op=j.restorable()[0];assert recover_operation(op['id'],a,j).state=='completed'
+    assert next(t for t in a.snapshot().conversations if t.id==tid).project_id==p.id

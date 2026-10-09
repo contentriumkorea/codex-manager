@@ -116,6 +116,7 @@ class ManagementActions:
             menu.addAction('제목 복사',lambda:self.copy_thread_titles(ids))
             menu.addAction(f'프로젝트로 이동… ({len(ids)}개)',lambda:self.move_selected_threads(ids))
             menu.addSeparator();menu.addAction(f'대화 삭제… ({len(ids)}개)',lambda:self.delete_selected_threads(ids))
+        self.shortcuts.add_menu(menu,self.thread_list)
         menu.exec(self.thread_list.viewport().mapToGlobal(point))
 
     def sync_thread_actions(self):

@@ -63,7 +63,7 @@ class FileBrowser(QWidget):
         self.root_picker=QComboBox();self.root_picker.currentIndexChanged.connect(self.choose_root);layout.addWidget(self.root_picker)
         self.model=ProjectFiles(self);self.model.setReadOnly(True)
         self.view=QTreeView();self.view.setModel(self.model);self.view.setRootIsDecorated(False);self.view.setUniformRowHeights(True)
-        self.view.setEditTriggers(QAbstractItemView.NoEditTriggers);self.view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.view.setEditTriggers(QAbstractItemView.NoEditTriggers);self.view.setSelectionBehavior(QAbstractItemView.SelectRows);self.view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.view.setSortingEnabled(True);self.view.sortByColumn(0,Qt.AscendingOrder);self.view.setAlternatingRowColors(False)
         self.view.setColumnWidth(0,280);self.view.setColumnWidth(1,95);self.view.setColumnWidth(2,110)
         self.view.doubleClicked.connect(self.open_index);self.view.setContextMenuPolicy(Qt.CustomContextMenu);self.view.customContextMenuRequested.connect(self.context_menu)
@@ -116,8 +116,13 @@ class FileBrowser(QWidget):
     def context_menu(self,point):
         index=self.view.indexAt(point)
         if not index.isValid():return
-        self.view.setCurrentIndex(index);path=self.model.filePath(index);menu=QMenu(self)
+
+        if not self.view.selectionModel().isSelected(index):self.view.setCurrentIndex(index)
+        path=self.model.filePath(index);menu=QMenu(self)
         menu.addAction('열기',lambda:self.open_index(index))
+        if hasattr(self,'shortcut_handler'):
+            for title,key in [('복사','Ctrl+C'),('잘라내기','Ctrl+X'),('붙여넣기','Ctrl+V'),('이름 변경','F2'),('삭제','Delete'),('실행 취소','Ctrl+Z')]:
+                action=self.shortcut_handler.actions[(self.view,key)];action.setText(title+'\t'+key);menu.addAction(action)
         menu.addAction('경로 복사',lambda:QApplication.clipboard().setText(path))
         menu.addAction('상위 폴더를 탐색기에서 열기',lambda:QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent))))
         menu.exec(self.view.viewport().mapToGlobal(point))
