@@ -61,6 +61,7 @@ class MainWindow(ManagementActions,QMainWindow):
         self.stores[adapter.home]=Store(adapter.home,True)
         self.membership=display_membership(self.snapshot,{})
         self.startup_update_check=True;self.latest_release=None;self.update_dialog=None;self.update_popup_pending=False
+        self.activity_dialog=None
         settings_path=self.state_dir/'settings.json'
         if settings_path.exists():
             try:
@@ -69,6 +70,7 @@ class MainWindow(ManagementActions,QMainWindow):
                 self.backups=[Path(p) for p in backups if isinstance(p,str) and p] if isinstance(backups,list) else []
                 self.startup_update_check=saved.get('startup_update_check',True) is not False
             except (ValueError,OSError): pass
+        self.backups.extend(p for p in self.journal.verified_backups(adapter.home) if p not in self.backups)
         self.setWindowTitle(APP_NAME);self.resize(1260,810);self.setMinimumSize(950,630)
         from .layout import build_layout
         self.browsing_project=None
@@ -136,14 +138,16 @@ class MainWindow(ManagementActions,QMainWindow):
         self.chat_status.setVisible(mode in ('projects','unassigned','conversations'));self.thread_search.setVisible(mode=='projects')
         self.import_button.setVisible(mode in ('projects','backups'));self.size_status.setVisible(mode=='projects')
         self.project_actions.setVisible(mode=='projects');self.home_button.hide()
-        self.subtitle.setText({'projects':'Ctrl·Shift로 여러 개 선택 → 다른 프로젝트에 끌어 놓아 합치기 · 열 제목 클릭으로 정렬','conversations':'여러 대화를 끌어 왼쪽 모든 프로젝트 위에 잠시 머문 뒤, 대상 프로젝트에 놓으세요.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다.'}[mode])
+        self.subtitle.setText({'projects':'Ctrl·Shift로 여러 개 선택 → 왼쪽 프로젝트에 끌어 놓아 합치기 · 열 제목 클릭으로 정렬','conversations':'여러 대화를 선택한 뒤 왼쪽 대상 프로젝트에 끌어 놓으면 함께 옮길 수 있습니다.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다. 완료·실패 결과는 작업 내역에서 확인하세요.'}[mode])
         self.project_list.clear();self.project_list.blockSignals(False)
         self.footer.setText('Ctrl·Shift로 여러 개 선택 · Ctrl+A 전체 선택 · F2 이름 변경 · Delete 삭제' if mode in ('projects','conversations','unassigned') else '항목을 선택하면 오른쪽에서 상세 작업을 확인할 수 있습니다.')
         self.filter_list()
+        self.selection_bar.activate(self.project_list)
 
     def show_projects(self):
         if self.mode!='projects':self.set_mode('projects');return
         self.browsing_project=None;self.browser_stack.setCurrentWidget(self.project_list);self.home_button.hide();self.heading.setText('모든 프로젝트');self.update_empty_state()
+        self.selection_bar.activate(self.project_list)
 
     def navigate_back(self):
         if self.browser_stack.currentWidget()==self.file_browser:self.file_browser.go_back()
@@ -154,6 +158,7 @@ class MainWindow(ManagementActions,QMainWindow):
         if not p:return
         self.browsing_project=p.id;self.file_browser.set_project(p);self.browser_stack.setCurrentWidget(self.file_browser)
         self.home_button.show();self.heading.setText(p.name);self.empty_state.hide()
+        self.selection_bar.activate(self.file_browser.view)
 
     def open_selected(self,item,*_):
         if self.mode=='projects':self.open_project()
@@ -173,7 +178,7 @@ class MainWindow(ManagementActions,QMainWindow):
         menu=QMenu(self)
         if self.mode=='projects':
             for title,callback in [('열기',self.open_project),('이름 변경…',self.rename_selected_project),('옮기기…',self.move),('다른 프로젝트와 합치기…',self.merge),('백업 만들기…',self.backup),('프로젝트 설정…',self.connections),('프로젝트 삭제…',self.delete_selected_project)]:
-                action=menu.addAction(title,callback);action.setEnabled(len(self.selected_projects())<=1 or callback in (self.move,self.merge))
+                action=menu.addAction(title,callback);action.setEnabled(len(self.selected_projects())<=1 or callback in (self.move,self.merge,self.backup))
             project=self.selected_project()
             if project and project.roots:menu.addAction('폴더 경로 복사',lambda:QApplication.clipboard().setText(str(project.roots[0])))
         elif self.mode=='backups':menu.addAction('이 백업 복원하기…',self.restore)
@@ -202,8 +207,11 @@ class MainWindow(ManagementActions,QMainWindow):
 
     def refresh(self,snapshot):
         self.snapshot=snapshot
+        self.backups.extend(p for p in self.journal.verified_backups(self.adapter.home) if p not in self.backups)
         self.membership=display_membership(snapshot,read_settings(self.adapter.home/'.codex-global-state.json'))
         self.size_scanner.reset(self.ordered_projects());self.sizes={pid:r.total for pid,r in self.size_scanner.results.items()};self.filter_list();self.update_size_status()
+        self.navigator.refresh()
+        if self.activity_dialog:self.activity_dialog.refresh()
 
     def reload(self):
         self.run_job('프로젝트 확인',lambda w:self.adapter.snapshot(include_runtime=False),self.refresh)
@@ -264,7 +272,7 @@ class MainWindow(ManagementActions,QMainWindow):
         self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False);self.assign_action.setEnabled(bool(self.project_list.selectedItems()));self.recovery_action.setEnabled(self.project_list.currentItem() is not None)
         if self.browsing_project and (not p or p.id!=self.browsing_project):self.show_projects()
         if self.browsing_project and p:self.file_browser.set_project(p);self.heading.setText(p.name)
-        for key,b in self.buttons.items():b.setEnabled(p is not None and (key in ('move','merge') or len(self.selected_projects())<=1))
+        for key,b in self.buttons.items():b.setEnabled(p is not None and (key in ('move','merge','backup') or len(self.selected_projects())<=1))
         self.cleanup_button.setEnabled(False);self.cleanup_button.setToolTip('실제 계정의 복원 후 이어쓰기 검증 전에는 원본 정리를 사용하지 않습니다.')
         if p:
             for bundle in self.backups:
@@ -316,6 +324,7 @@ class MainWindow(ManagementActions,QMainWindow):
             if item.data(Qt.UserRole) in selected_threads:item.setSelected(True)
         self.detail_title.setToolTip(self.detail_title.text());self.detail_status.setToolTip(self.detail_status.text())
         self.sync_thread_actions()
+        self.navigator.sync_current()
 
     def run_job(self,title,func,done=None):
         if self.updater.requested:
@@ -324,6 +333,7 @@ class MainWindow(ManagementActions,QMainWindow):
         self.size_scanner.stop()
         dialog=QProgressDialog(title,'취소',0,0,self);dialog.setWindowTitle('작업 중');dialog.setWindowModality(Qt.WindowModal);dialog.setMinimumDuration(0);dialog.setAutoClose(False);dialog.setAutoReset(False)
         worker=Worker(func);self.workers.append(worker);dialog.canceled.connect(worker.cancelled.set)
+        self.selection_bar.sync()
         def progress(current,total):
             if total: dialog.setRange(0,1000);dialog.setValue(int(current/total*1000));dialog.setLabelText(f'{title}\n{bytes_text(current)} / {bytes_text(total)}')
         worker.progress.connect(progress)
@@ -333,16 +343,55 @@ class MainWindow(ManagementActions,QMainWindow):
         worker.result.connect(success);worker.error.connect(lambda e:(dialog.close(),QMessageBox.warning(self,'작업 확인',e)))
         def finish():
             self.workers.remove(worker);worker.deleteLater();self.sync_size_scan()
+            self.selection_bar.sync()
+            if self.activity_dialog:self.activity_dialog.refresh()
         worker.finished.connect(finish);worker.start()
 
     def show_result(self,result):
         if self.updater.requested:
             self.footer.setText('프로젝트 작업 완료 · 업데이트를 계속합니다.');return
         if hasattr(result,'state'):
-            message='\n'.join([result.file_status,result.codex_status,result.cleanup_status,result.mobile_status,*result.errors])
-            QMessageBox.information(self,'작업 결과',message)
+            if result.report_id:self.open_activity().show_result(result)
+            elif result.errors:QMessageBox.warning(self,'작업 결과','\n'.join([result.file_status,*result.errors]))
+            self.footer.setText(result.file_status+' · 작업 내역에서 결과를 확인할 수 있습니다.')
         else: QMessageBox.information(self,'작업 결과','검증을 마쳤습니다.')
         QTimer.singleShot(50,self.reload)
+
+    def open_activity(self):
+        from .activity import ActivityDialog
+        if not self.activity_dialog:self.activity_dialog=ActivityDialog(self)
+        self.activity_dialog.refresh();self.activity_dialog.show();self.activity_dialog.raise_()
+        return self.activity_dialog
+
+    def retry_activity(self,operation_id):
+        from .activity import retry_candidates
+        if self.shortcuts.busy():return
+        operation=self.journal.operation(operation_id)
+        if not operation or Path(operation['payload'].get('home',''))!=self.adapter.home:return
+        ids=retry_candidates(operation,self.journal)
+        if not ids:return
+        def ready(snapshot):
+            self.refresh(snapshot)
+            def start():
+                if self.workers:QTimer.singleShot(20,start);return
+                current=self.journal.operation(operation_id)
+                if not current or retry_candidates(current,self.journal)!=ids:return
+                projects=tuple(p for p in snapshot.projects if p.id in ids)
+                if len(projects)!=len(ids):
+                    QMessageBox.information(self,'다시 시도','프로젝트가 삭제되거나 다른 작업으로 합쳐졌습니다. 현재 프로젝트 목록에서 대상을 다시 선택하세요.');return
+                payload=operation['payload']
+                if payload['action']=='backup':self.backup(projects=projects,retry_of=operation_id);return
+                target=next((p for p in snapshot.projects if p.id==payload.get('target_id')),None)
+                if payload['action']=='merge' and not target:
+                    QMessageBox.information(self,'다시 시도','대상 프로젝트를 찾을 수 없습니다. 현재 목록에서 합칠 대상을 다시 선택하세요.');return
+                parent=None
+                if not target:
+                    folder=QFileDialog.getExistingDirectory(self,'미완료 프로젝트를 옮길 폴더')
+                    if not folder:return
+                    parent=Path(folder)
+                self.transfer_projects(projects,target=target,parent=parent,retry_of=operation_id)
+            QTimer.singleShot(0,start)
+        self.run_job('재시도할 프로젝트 확인',lambda worker:self.adapter.snapshot(include_runtime=False),ready)
 
     def ordered_projects(self):
         return self.column_sort.projects(self.snapshot.projects)
@@ -486,28 +535,36 @@ class MainWindow(ManagementActions,QMainWindow):
             text.setPlainText('\n\n'.join(('나' if m['role']=='user' else 'Codex')+'\n'+m['text'] for m in messages));layout.addWidget(text);d.exec()
         self.run_job('대화 읽기',read,show)
 
-    def backup(self):
-        p=self.selected_project()
-        if not p: return
+    def backup(self,checked=False,projects=None,callback=None,retry_of=None):
+        if self.shortcuts.busy():return
+        projects=tuple(projects) if projects is not None else self.selected_projects()
+        if not projects:return
         parent=QFileDialog.getExistingDirectory(self,'백업을 저장할 폴더')
         if not parent: return
         stamp=datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d_%H%M%S')
-        safe=re.sub(r'[<>:"/\\|?*]','_',p.name).strip('. ') or 'project'
-        destination=Path(parent)/(safe+'_'+stamp)
-        ts=self.project_threads(p.id)
-        if not confirm(self,'프로젝트 백업',f'{p.name}\n\n대화 {len(ts)}개와 폴더 {len(p.roots)}개를 함께 복사합니다.\n\n백업 위치\n{destination}\n\n원본은 유지합니다.'): return
+        reserved=set();plans=[]
+        for p in projects:
+            safe=re.sub(r'[<>:"/\\|?*]','_',p.name).strip('. ') or 'project'
+            destination=Path(parent)/(safe+'_'+stamp);n=2
+            while destination.exists() or str(destination).casefold() in reserved:
+                destination=Path(parent)/(safe+'_'+stamp+f' ({n})');n+=1
+            reserved.add(str(destination).casefold());plans.append((p,destination))
+        preview='\n\n'.join(f'{p.name} · 대화 {len(self.project_threads(p.id))}개 · 폴더 {len(p.roots)}개\n{destination}' for p,destination in plans)
+        if not confirm(self,'프로젝트 백업',preview+'\n\n파일과 대화를 함께 복사하고 검증합니다. 원본은 유지합니다.'):return
         def done(result):
-            if not result.ok:QMessageBox.warning(self,'백업 확인','\n'.join(result.errors));return
-            self.backups.append(destination);self.save_settings();self.search.clear();self.set_mode('backups')
-            for n in range(self.project_list.count()):
-                if self.project_list.item(n).data(Qt.UserRole)==str(destination):self.project_list.setCurrentRow(n);break
-            self.footer.setText('백업 완료 · '+str(destination))
-            if not self.updater.requested:QMessageBox.information(self,'백업 완료','파일과 대화를 함께 백업했습니다.\n\n저장 위치\n'+str(destination)+'\n\n왼쪽 백업 메뉴에서 다시 열 수 있습니다.')
-        def export(w):
-            snapshot=self.adapter.snapshot()
-            membership=display_membership(snapshot,read_settings(self.adapter.home/'.codex-global-state.json'))
-            return export_project(p,snapshot,destination,w.progress.emit,w.cancelled.is_set,folder_memberships=membership.inferred)
-        self.run_job('대화와 파일 백업',export,done)
+            report=self.journal.operation(result.report_id)
+            verified=[Path(item['destinations'][0]) for item in report['payload']['items'] if item['status']=='completed']
+            self.backups.extend(p for p in verified if p not in self.backups);self.save_settings()
+            if verified:
+                self.section_queries['backups']='';self.set_mode('backups')
+                for n in range(self.project_list.count()):
+                    if self.project_list.item(n).data(Qt.UserRole)==str(verified[-1]):self.project_list.setCurrentRow(n);break
+            if callback:callback(result)
+            else:
+                self.open_activity().show_result(result);self.footer.setText(result.file_status)
+        from .batch import run_backups
+        adapter=self.adapter
+        self.run_job('대화와 파일 백업',lambda worker:run_backups(adapter,plans,self.journal,export_project,worker.progress.emit,worker.cancelled.is_set,retry_of),done)
 
     def guard_change(self):
         try: self.adapter.ensure_write_allowed();return True
@@ -528,7 +585,7 @@ class MainWindow(ManagementActions,QMainWindow):
         dialog=ProjectPicker(self,others,'프로젝트 합치기',f'선택한 프로젝트 {len(sources)}개를 받을 프로젝트를 선택하세요.')
         if dialog.exec()==QDialog.Accepted:self.transfer_projects(sources,target=next(p for p in others if p.id==dialog.project_id()))
 
-    def transfer_projects(self,sources,target=None,parent=None,done=None):
+    def transfer_projects(self,sources,target=None,parent=None,done=None,retry_of=None):
         if self.shortcuts.busy() or not sources:return
         if target and (not target.roots or any(p.id==target.id for p in sources)):return
         from .batch import plan_projects,run_projects
@@ -537,6 +594,7 @@ class MainWindow(ManagementActions,QMainWindow):
         title='프로젝트 합치기' if target else '프로젝트 옮기기'
         inferred={p.id:tuple(t.id for t in self.folder_threads(p.id)) for p in sources}
         text=(f'대상 프로젝트: {target.name} (이 이름 유지)\n\n' if target else '')
+        if target:text+='합친 뒤 원래 프로젝트 이름은 목록에서 사라지고, 대화는 대상 프로젝트에 모입니다.\n파일은 대상 폴더 아래 각 프로젝트 이름의 폴더로 모읍니다.\n\n'
         text+='\n\n'.join(p.name+'\n'+'\n'.join(str(a)+' → '+str(b) for a,b in mapping.items()) for p,mapping in plans)
         for p in sources:
             if inferred[p.id]:text+=f'\n\n{p.name}: 같은 폴더에서 작업한 대화 {len(inferred[p.id])}개를 먼저 연결합니다.'
@@ -544,7 +602,7 @@ class MainWindow(ManagementActions,QMainWindow):
         clean=confirm_transfer(self,title,text)
         if clean is None or not self.guard_change():return
         adapter=self.adapter
-        self.run_job(title,lambda worker:run_projects(adapter,plans,target,clean,self.journal,inferred,worker.progress.emit,worker.cancelled.is_set),done or self.show_result)
+        self.run_job(title,lambda worker:run_projects(adapter,plans,target,clean,self.journal,inferred,worker.progress.emit,worker.cancelled.is_set,retry_of),done or self.show_result)
 
     def start_transfer(self,p,destinations,target=None,done=None):
         text=p.name+(' → '+target.name if target else '')+'\n\n'
@@ -606,11 +664,14 @@ class MainWindow(ManagementActions,QMainWindow):
         if not confirm(self,'백업 가져오기',m['project']['name']+'\n\n'+'\n'.join(str(p) for p in destinations.values())+'\n\n파일을 복원하고 대화를 이 컴퓨터의 Codex에 등록합니다.'): return
         self.run_job('프로젝트 복원',lambda w:import_bundle(bundle,destinations,self.adapter,self.journal,w.progress.emit,w.cancelled.is_set),self.show_result)
 
-    def show_recovery(self):
-        item=self.project_list.currentItem()
-        if not item: return
-        operation_id=item.data(Qt.UserRole)
-        data=next(p for p in self.recovery_items() if p['id']==operation_id)
+    def show_recovery(self,operation_id=None):
+        if self.shortcuts.busy():return
+        if not isinstance(operation_id,str):
+            item=self.project_list.currentItem()
+            if not item:return
+            operation_id=item.data(Qt.UserRole)
+        data=next((p for p in self.recovery_items() if p['id']==operation_id),None)
+        if not data:return
         recovery=data['payload'].get('recovery')
         events=self.journal.events(operation_id)
         error=next((e['payload']['error'] for e in reversed(events) if 'error' in e['payload']),'이전 상태로 되돌릴 수 있습니다.' if data['state']=='completed' else '작업이 중단됐습니다.')

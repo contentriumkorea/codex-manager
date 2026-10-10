@@ -118,7 +118,7 @@ def recover_cleanup(operation,bundle,adapter,journal,progress):
             if str(target) not in changed and (not target.is_file() or digest(target)!=e['sha256']): raise ValueError('복구 파일 재검증 실패: '+str(target))
         adapter.sync_desktop_state([project],{t['id']:pid if t['project_id']==old['id'] else t['project_id'] for t in ordered},[old['id']] if pid!=old['id'] else [])
         journal.record(op,'completed',{'recovered':True,'preserved_changed_files':changed})
-        return OperationResult('completed','누락 파일 복구 완료'+(' · 변경 파일 보존 '+str(len(changed))+'개' if changed else ''),'누락 대화 복구 완료','백업·기존 파일 유지','모바일 미확인')
+        return OperationResult('completed','누락 파일 복구 완료'+(' · 변경 파일 보존 '+str(len(changed))+'개' if changed else ''),'누락 대화 복구 완료','백업·기존 파일 유지','모바일 미확인',report_id=op)
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','백업·기존 파일 유지','누락 항목 복구 진행 중','다시 복구할 수 있습니다.','모바일 미확인',(str(exc),))
+        return OperationResult('needs_recovery','백업·기존 파일 유지','누락 항목 복구 진행 중','다시 복구할 수 있습니다.','모바일 미확인',(str(exc),),report_id=op)

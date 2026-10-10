@@ -1,6 +1,6 @@
 """Project columns and a read-only, asynchronous file browser."""
 from pathlib import Path
-from PySide6.QtCore import Qt,Signal,QUrl,QSize
+from PySide6.QtCore import Qt,Signal,QUrl,QSize,QModelIndex
 from PySide6.QtGui import QDesktopServices,QAction
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QPushButton,QLineEdit,QLabel,
     QComboBox,QTreeView,QTreeWidget,QTreeWidgetItem,QHeaderView,QAbstractItemView,
@@ -77,6 +77,7 @@ class FileBrowser(QWidget):
         key=(project.id,tuple(str(p) for p in project.roots))
         if key==self.project_key:return
         self.project_key=key;self.roots=project.roots;self.history=[];self.position=-1;self.current_path=None
+        self.view.clearSelection();self.view.setCurrentIndex(QModelIndex())
         self.root_picker.blockSignals(True);self.root_picker.clear()
         for root in self.roots:self.root_picker.addItem(str(root),str(root))
         self.root_picker.blockSignals(False);self.root_picker.setVisible(len(self.roots)>1)
@@ -95,6 +96,7 @@ class FileBrowser(QWidget):
             self.status.setText(str(exc));self.location.setText(str(self.current_path or path));return False
         if remember and path!=self.current_path:
             self.history=self.history[:self.position+1]+[path];self.position=len(self.history)-1
+        if path!=self.current_path:self.view.clearSelection();self.view.setCurrentIndex(QModelIndex())
         self.current_path=path;self.location.setText(str(path));self.location.setCursorPosition(0)
         self.view.setRootIndex(self.model.setRootPath(str(path)));self.view.show();self.reveal.setEnabled(True)
         self.status.setText('폴더는 두 번 클릭해 들어가고, 파일은 기본 프로그램으로 엽니다.');return True

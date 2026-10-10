@@ -71,10 +71,10 @@ def cleanup_export(project,bundle,adapter,journal):
         adapter.delete_project(project.id)
         adapter.sync_desktop_state([],{tid:None for tid in tids},[project.id],deleted=tids)
         journal.record(operation_id,'completed',{})
-        return OperationResult('completed','백업 검증 완료','대화 삭제 완료','원본 파일 정리 완료','모바일 미확인')
+        return OperationResult('completed','백업 검증 완료','대화 삭제 완료','원본 파일 정리 완료','모바일 미확인',report_id=operation_id)
     except Exception as exc:
         journal.record(operation_id,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','백업 유지','정리 일부 완료','작업 기록 확인 필요','모바일 미확인',(str(exc),))
+        return OperationResult('needs_recovery','백업 유지','정리 일부 완료','작업 기록 확인 필요','모바일 미확인',(str(exc),),report_id=operation_id)
 
 
 def remove_verified_files(inventory,sources,destinations):

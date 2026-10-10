@@ -55,10 +55,10 @@ def rename_thread(adapter,thread,name,journal):
     try:
         set_thread_name(adapter,thread.id,name)
         journal.record(op,'completed',{})
-        return OperationResult('completed','파일 유지','대화 제목 변경 완료','대화 기록 유지')
+        return OperationResult('completed','파일 유지','대화 제목 변경 완료','대화 기록 유지',report_id=op)
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','파일 유지','제목 변경 확인 필요','대화 기록 유지',errors=(str(exc),))
+        return OperationResult('needs_recovery','파일 유지','제목 변경 확인 필요','대화 기록 유지',errors=(str(exc),),report_id=op)
 
 
 def title_changes(names,find='',replacement='',prefix='',suffix=''):
@@ -82,10 +82,10 @@ def rename_threads(adapter,threads,names,journal):
             journal.record(op,'renaming',{'thread_id':change['id']})
             set_thread_name(adapter,change['id'],change['new_name'])
         journal.record(op,'completed',{})
-        return OperationResult('completed','파일 유지',f'대화 {len(changes)}개 제목 변경 완료','작업 복구에서 이전 제목으로 되돌릴 수 있습니다.')
+        return OperationResult('completed','파일 유지',f'대화 {len(changes)}개 제목 변경 완료','작업 복구에서 이전 제목으로 되돌릴 수 있습니다.',report_id=op)
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','파일 유지','제목 변경 일부 완료','작업 복구에서 이전 제목으로 되돌리세요.',errors=(str(exc),))
+        return OperationResult('needs_recovery','파일 유지','제목 변경 일부 완료','작업 복구에서 이전 제목으로 되돌리세요.',errors=(str(exc),),report_id=op)
 
 
 def move_threads(adapter,threads,target_id,journal):
@@ -191,17 +191,17 @@ def delete_items(adapter,plan,journal,recovery_root,delete_files=False,progress=
         adapter.sync_desktop_state([],{tid:None for tid in ids},[plan.project.id] if plan.project else [],deleted=ids)
         journal.record(op,'completed',{})
         return OperationResult('completed','작업 파일 삭제 완료' if delete_files else '작업 파일 유지',
-                               '프로젝트·대화 삭제 완료' if plan.project else '대화 삭제 완료','복구 사본: '+str(recovery))
+                               '프로젝트·대화 삭제 완료' if plan.project else '대화 삭제 완료','복구 사본: '+str(recovery),report_id=op)
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','복구 사본 유지','삭제 일부 완료','작업 복구에서 복원하세요.',errors=(str(exc),))
+        return OperationResult('needs_recovery','복구 사본 유지','삭제 일부 완료','작업 복구에서 복원하세요.',errors=(str(exc),),report_id=op)
 
 
 def recover_management(operation,adapter,journal):
     adapter.ensure_write_allowed();payload=operation['payload'];op=operation['id']
     if Path(payload['home']).resolve()!=adapter.home.resolve():raise ValueError('작업을 시작한 Codex 저장소를 선택하세요.')
     if any(e['payload'].get('recovered') for e in journal.events(op)):
-        return OperationResult('completed','복구 확인 완료','이미 복구한 작업입니다.','파일 유지')
+        return OperationResult('completed','복구 확인 완료','이미 복구한 작업입니다.','파일 유지',report_id=op)
     if payload['kind']=='rename-threads':
         current={t.id:t for t in adapter.snapshot().conversations}
         changes=payload['changes']
@@ -259,4 +259,4 @@ def recover_management(operation,adapter,journal):
             assignments[t['id']]=target
         adapter.sync_desktop_state(projects,assignments,[old['id']] if old and pid!=old['id'] else [])
     journal.record(op,'completed',{'recovered':True})
-    return OperationResult('completed','파일 복구 확인 완료','이전 기록 복구 완료','복구 사본 유지')
+    return OperationResult('completed','파일 복구 확인 완료','이전 기록 복구 완료','복구 사본 유지',report_id=op)

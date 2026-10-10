@@ -96,3 +96,4 @@ class OperationResult:
     cleanup_status: str
     mobile_status: str = '모바일 미확인'
     errors: tuple[str,...] = ()
+    report_id: str|None = None

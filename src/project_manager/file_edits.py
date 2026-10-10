@@ -119,15 +119,15 @@ def edit_files(kind,sources,destination,roots,protected,journal,home,name=None,c
                     hold=checked(plan['hold']);hold.parent.mkdir(parents=True,exist_ok=True);source.rename(hold)
             journal.record(op,'editing',{'source':str(source)})
         journal.record(op,'completed',{})
-        return OperationResult('completed',labels[kind]+' 완료','대화 연결 유지','Ctrl+Z 또는 작업 복구에서 되돌릴 수 있습니다.','해당 없음')
+        return OperationResult('completed',labels[kind]+' 완료','대화 연결 유지','Ctrl+Z 또는 작업 복구에서 되돌릴 수 있습니다.','해당 없음',report_id=op)
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','파일 작업 일부 완료','대화 연결 유지','작업 복구에서 확인하세요. 부분 복사본은 복구 보관소에 유지됩니다.','해당 없음',(str(exc),))
+        return OperationResult('needs_recovery','파일 작업 일부 완료','대화 연결 유지','작업 복구에서 확인하세요. 부분 복사본은 복구 보관소에 유지됩니다.','해당 없음',(str(exc),),report_id=op)
 
 
 def undo_files(operation,journal):
     op=operation['id'];plans=operation['payload']['plans'];events=journal.events(op)
-    if any(e['payload'].get('recovered') for e in events):return OperationResult('completed','이미 복구했습니다.','대화 유지','파일 유지')
+    if any(e['payload'].get('recovered') for e in events):return OperationResult('completed','이미 복구했습니다.','대화 유지','파일 유지',report_id=op)
     intents={e['payload']['index']:e['payload']['identity'] for e in events if e['phase']=='publish-intent'}
     owned=[]
     for index,plan in enumerate(plans):
@@ -162,4 +162,4 @@ def undo_files(operation,journal):
                 target.rename(kept)
         journal.record(op,'restoring-file',{'source':str(source)})
     journal.record(op,'completed',{'recovered':True})
-    return OperationResult('completed','파일 작업 되돌리기 완료','대화 연결 유지','부분 복사본과 되돌린 복사본은 .codex-manager-file-recovery에 보관됩니다.','해당 없음')
+    return OperationResult('completed','파일 작업 되돌리기 완료','대화 연결 유지','부분 복사본과 되돌린 복사본은 .codex-manager-file-recovery에 보관됩니다.','해당 없음',report_id=op)

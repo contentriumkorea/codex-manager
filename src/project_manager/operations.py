@@ -35,7 +35,7 @@ def change_connections(adapter,project,assignments,journal):
         for tid,pid in assignments.items(): adapter.assign_conversation(tid,pid)
         adapter.sync_desktop_state([project],assignments)
         journal.record(operation_id,'completed',{})
-        return OperationResult('completed','파일 유지','연결 변경 완료','원본 파일 유지')
+        return OperationResult('completed','파일 유지','연결 변경 완료','원본 파일 유지',report_id=operation_id)
     except Exception as exc:
         errors=[]
         try:
@@ -44,7 +44,7 @@ def change_connections(adapter,project,assignments,journal):
             adapter.sync_desktop_state([original],old)
         except Exception as rollback: errors.append(str(rollback))
         journal.record(operation_id,'needs_recovery',{'error':str(exc),'rollback_errors':errors})
-        return OperationResult('needs_recovery','파일 유지','이전 연결 복구 확인 필요','원본 파일 유지',errors=(str(exc),*errors))
+        return OperationResult('needs_recovery','파일 유지','이전 연결 복구 확인 필요','원본 파일 유지',errors=(str(exc),*errors),report_id=operation_id)
 
 
 def transfer_project(adapter, project, destinations, journal, recovery_root, target=None, clean=False, progress=lambda *_:None, cancelled=lambda:False):
@@ -120,7 +120,7 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
             from .cleanup import remove_verified_files
             require(remove_verified_files(inventory,roots,dest))
         journal.record(operation_id,'completed',{})
-        return OperationResult('completed','검증 완료','연결 변경 완료','원본 정리 완료' if clean else '원본 파일 유지','모바일 미확인')
+        return OperationResult('completed','검증 완료','연결 변경 완료','원본 정리 완료' if clean else '원본 파일 유지','모바일 미확인',report_id=operation_id)
     except Exception as exc:
         rollback_errors=[]
         for t in reversed(moved) if not linked_done else []:
@@ -134,7 +134,7 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
             try: adapter.sync_desktop_state([source]+([target] if target else []),{t.id:t.project_id for t in conversations})
             except Exception as error: rollback_errors.append(str(error))
         journal.record(operation_id,'needs_recovery',{'error':str(exc),'rollback_errors':rollback_errors})
-        return OperationResult('needs_recovery','복사본 유지','복구 확인 필요','원본 파일 유지','모바일 미확인',(str(exc),*rollback_errors))
+        return OperationResult('needs_recovery','복사본 유지','복구 확인 필요','원본 파일 유지','모바일 미확인',(str(exc),*rollback_errors),report_id=operation_id)
 
 
 def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:None, cancelled=lambda:False, resume_id=None):
@@ -209,10 +209,10 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
         write_json(reports/(m['bundle_id']+'.json'),{'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'project_id':pid,
                    'destinations':dest,'threads':{t['id']:{'offset':next(x for x in restored.conversations if x.id==t['id']).rollout.stat().st_size} for t in m['conversations']}})
         journal.record(operation_id,'completed',{})
-        return OperationResult('completed','복원 검증 완료','대화 등록 완료','백업 유지','모바일 미확인')
+        return OperationResult('completed','복원 검증 완료','대화 등록 완료','백업 유지','모바일 미확인',report_id=operation_id)
     except Exception as exc:
         journal.record(operation_id,'needs_recovery',{'error':str(exc)})
-        return OperationResult('needs_recovery','부분 복원','등록 확인 필요','백업 유지','모바일 미확인',(str(exc),))
+        return OperationResult('needs_recovery','부분 복원','등록 확인 필요','백업 유지','모바일 미확인',(str(exc),),report_id=operation_id)
 
 
 def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundle_override=None):
@@ -226,12 +226,12 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundl
     if operation['payload']['kind'] in ('management-delete','rename-thread','rename-threads'):
         from .management import recover_management
         return recover_management(operation,adapter,journal)
-    if operation['state']=='completed' and not (operation['payload']['kind']=='connections' and 'expected_project' in operation['payload']): return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지')
+    if operation['state']=='completed' and not (operation['payload']['kind']=='connections' and 'expected_project' in operation['payload']): return OperationResult('completed','복구 확인 완료','이미 완료한 작업입니다.','파일 유지',report_id=operation_id)
     payload=operation['payload']
     if Path(payload['home']).resolve()!=adapter.home.resolve(): raise ValueError('작업을 시작한 Codex 저장소를 선택하세요: '+payload['home'])
     if payload['kind']=='connections':
         if any(e['payload'].get('recovered') for e in journal.events(operation_id)):
-            return OperationResult('completed','파일 유지','이미 복구했습니다.','파일 유지')
+            return OperationResult('completed','파일 유지','이미 복구했습니다.','파일 유지',report_id=operation_id)
         if 'expected_project' in payload:
             snap=adapter.snapshot();current=next((p for p in snap.projects if p.id==payload['project']['id']),None)
             encoded=json.loads(json.dumps(asdict(current),default=str)) if current else None
@@ -244,7 +244,7 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundl
         for tid,pid in payload['assignments'].items(): adapter.assign_conversation(tid,pid)
         adapter.sync_desktop_state([original],payload['assignments'])
         journal.record(operation_id,'completed',{'recovered':True})
-        return OperationResult('completed','파일 유지','이전 연결 복구 완료','원본 파일 유지')
+        return OperationResult('completed','파일 유지','이전 연결 복구 완료','원본 파일 유지',report_id=operation_id)
     if payload['kind']=='import':
         return import_bundle(Path(bundle_override or payload['bundle']),{k:Path(v) for k,v in payload['destinations'].items()},adapter,journal,progress,resume_id=operation_id)
     if payload['kind']=='export-cleanup':
@@ -288,4 +288,4 @@ def recover_operation(operation_id,adapter,journal,progress=lambda *_:None,bundl
         adapter.assign_conversation(t['id'],pid if t['project_id']==old['id'] else t['project_id'])
     adapter.sync_desktop_state(restored_projects,{t['id']:pid if t['project_id']==old['id'] else t['project_id'] for t in metadata['conversations']})
     journal.record(operation_id,'completed',{'recovered':True})
-    return OperationResult('completed','원본 위치 복구 완료','이전 연결 복구 완료','복사본 유지','모바일 미확인')
+    return OperationResult('completed','원본 위치 복구 완료','이전 연결 복구 완료','복사본 유지','모바일 미확인',report_id=operation_id)

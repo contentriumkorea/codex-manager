@@ -79,3 +79,8 @@ QCheckBox::indicator:checked { background: #3865BA; border-color: #3865BA; image
 QCheckBox::indicator:disabled { background: #E5EAF2; border-color: #BDC8D9; }
 QPushButton#danger { color: #A63C4D; border-color: #DEC6CD; background: #FFF8FA; }
 QPushButton#danger:hover { color: #8C2439; border-color: #C997A4; background: #FBEAF0; }
+QPushButton#nav { padding: 7px 10px; }
+QTreeWidget#projectTree { background: transparent; }
+QTreeWidget#projectTree::item { padding: 6px 3px; border: 0; min-height: 21px; }
+QWidget#selectionBar { background: rgba(220,233,254,215); border: 1px solid #C4D8F6; border-radius: 10px; }
+QWidget#selectionBar QPushButton { padding: 6px 9px; }

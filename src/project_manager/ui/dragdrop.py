@@ -19,7 +19,7 @@ class ChatDragList(DragSource,QListWidget):pass
 class DragDrop(QObject):
     def __init__(self,w):
         super().__init__(w);self.w=w;self.payload=None;self.token=None;self.marks={};self.nav=None
-        self.views=(w.project_list,w.thread_list,w.file_browser.view)
+        self.views=(w.project_list,w.thread_list,w.file_browser.view,w.navigator.tree)
         for view in self.views:
             view.drag_controller=self;view.setDragEnabled(True);view.setAcceptDrops(True);view.viewport().setAcceptDrops(True)
             view.viewport().installEventFilter(self);view.setDropIndicatorShown(False)
@@ -30,7 +30,13 @@ class DragDrop(QObject):
     def mime_for(self,view):
         w=self.w
         if not w.shortcuts.live() or w.shortcuts.busy():return None
-        if view==w.file_browser.view:
+        if view==w.navigator.tree:
+            item=view.currentItem();data=item.data(0,Qt.UserRole) if item else None
+            if not data or data.get('root'):return None
+            sources=tuple(p for p in w.snapshot.projects if p.id==data['project_id'])
+            if not sources:return None
+            payload={'kind':'projects','sources':sources}
+        elif view==w.file_browser.view:
             paths=w.shortcuts.paths()
             if not paths:return None
             payload={'kind':'files','paths':paths}
@@ -68,7 +74,12 @@ class DragDrop(QObject):
         payload=self.decode(mime)
         if not payload:return None
         target=None;destination=None
-        if view==w.project_list and w.mode=='projects':
+        if view==w.navigator.tree:
+            item=view.itemAt(point);data=item.data(0,Qt.UserRole) if item else None
+            if data:
+                target=next((p for p in w.snapshot.projects if p.id==data['project_id']),None)
+                if target and target.roots:destination=Path(data['root']) if data.get('root') else target.roots[0]
+        elif view==w.project_list and w.mode=='projects':
             item=view.itemAt(point)
             if item:target=next((p for p in w.snapshot.projects if p.id==item.data(Qt.UserRole)),None)
             if target and target.roots:destination=target.roots[0]

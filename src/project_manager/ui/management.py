@@ -128,6 +128,7 @@ class ManagementActions:
         self.rename_chat_button.setEnabled(count>0);self.rename_chat_button.setText('제목 변경' if count<2 else f'제목 변경 ({count})')
         self.selection_status.setText(f'{self.project_list.count():,}개 표시 · {len(self.project_list.selectedItems()):,}개 선택' if self.mode in ('unassigned','conversations') else f'프로젝트 {len(self.selected_projects())}개 선택 · 대화 {count:,}개 선택')
         self.thread_manage.setText('대화 관리');self.thread_manage.setToolTip(f'선택한 대화 {count}개: 이동·복사·삭제')
+        if hasattr(self,'selection_bar'):self.selection_bar.sync()
 
     def recovery_items(self):
         return [op for op in self.journal.pending()+self.journal.restorable() if Path(op['payload']['home']).resolve()==self.adapter.home.resolve()]

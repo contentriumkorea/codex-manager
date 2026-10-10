@@ -16,14 +16,17 @@ def label(text,kind='muted'):
 def build_layout(w):
     w.resize(1420,860);w.setMinimumSize(1060,680)
     base=GlassBackdrop();w.setCentralWidget(base);outer=QHBoxLayout(base);outer.setContentsMargins(16,16,16,16);outer.setSpacing(20)
-    sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(194);panel_shadow(sidebar)
-    nav=QVBoxLayout(sidebar);nav.setContentsMargins(16,22,16,18);nav.setSpacing(8)
-    logo=QLabel();logo.setPixmap(QIcon(str(Path(__file__).parent/'app-icon.ico')).pixmap(40,40));nav.addWidget(logo)
-    nav.addWidget(label(APP_NAME,'brand'));nav.addWidget(label('파일과 대화를 한곳에서'));nav.addSpacing(26)
-    nav.addWidget(label('내 작업','section'));w.nav_buttons=[]
-    for text,mode in [('모든 프로젝트','projects'),('모든 대화','conversations'),('분류할 대화','unassigned'),('백업','backups'),('작업 복구','recovery')]:
+    sidebar=QWidget();sidebar.setObjectName('sidebar');sidebar.setFixedWidth(232);panel_shadow(sidebar)
+    nav=QVBoxLayout(sidebar);nav.setContentsMargins(12,16,12,14);nav.setSpacing(5)
+    brand=QHBoxLayout();logo=QLabel();logo.setPixmap(QIcon(str(Path(__file__).parent/'app-icon.ico')).pixmap(30,30));brand.addWidget(logo)
+    brand.addWidget(label(APP_NAME,'brand'));nav.addLayout(brand)
+    w.nav_buttons=[]
+    for text,mode in [('모든 프로젝트','projects'),('모든 대화','conversations'),('분류할 대화','unassigned'),('백업','backups')]:
         button=QPushButton(text);button.setObjectName('nav');button.setCheckable(True);button.clicked.connect(lambda _,m=mode:w.set_mode(m));nav.addWidget(button);w.nav_buttons.append((button,mode))
-    nav.addStretch();nav.addWidget(label('Codex 데이터 위치','section'))
+    w.activity_button=QPushButton('작업 내역 · 복구');w.activity_button.setObjectName('nav');w.activity_button.clicked.connect(lambda:w.open_activity());nav.addWidget(w.activity_button)
+    from .navigation import ProjectNavigator
+    w.navigator=ProjectNavigator(w);nav.addWidget(w.navigator,1)
+    nav.addWidget(label('Codex 데이터 위치','section'))
     w.store_picker=QComboBox();w.store_picker.setMinimumContentsLength(12);w.store_picker.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon);w.store_picker.currentIndexChanged.connect(w.switch_store);nav.addWidget(w.store_picker)
     w.connection=label('');w.connection.setMaximumHeight(36);nav.addWidget(w.connection)
     stores=QPushButton('다른 위치 찾기');stores.clicked.connect(w.open_stores);nav.addWidget(stores)
@@ -44,9 +47,9 @@ def build_layout(w):
     for title,key,handler in [('이름 변경','rename',w.rename_selected_project),('프로젝트 설정','links',w.connections),('프로젝트 삭제','delete',w.delete_selected_project),('백업 후 원본 정리','cleanup',w.export_cleanup)]:
         action=w.more_menu.addAction(title,handler);w.buttons[key]=action
     w.more.setMenu(w.more_menu);buttons.addWidget(w.more);toolbar.addWidget(w.project_actions);toolbar.addStretch()
-    filters=QHBoxLayout()
+    w.filter_bar=QWidget();filters=QHBoxLayout(w.filter_bar);filters.setContentsMargins(0,0,0,0)
     w.chat_status=QComboBox();w.chat_status.addItems(['전체 대화','보관하지 않은 대화','보관된 대화']);w.chat_status.setToolTip('대화 표시 범위');w.chat_status.currentIndexChanged.connect(w.filter_list);filters.addWidget(w.chat_status)
-    w.import_button=QPushButton('백업 가져오기');w.import_button.clicked.connect(w.open_backup);toolbar.addWidget(w.import_button);content.addLayout(toolbar);filters.addStretch();content.addLayout(filters)
+    w.import_button=QPushButton('백업 가져오기');w.import_button.clicked.connect(w.open_backup);toolbar.addWidget(w.import_button);content.addLayout(toolbar);filters.addStretch();content.addWidget(w.filter_bar)
     w.move_button=w.buttons['move'];w.cleanup_button=w.buttons['cleanup']
     w.split=QSplitter(Qt.Horizontal);w.split.setHandleWidth(16);content.addWidget(w.split,1)
     center=QWidget();center.setObjectName('browserPanel');panel_shadow(center);center_layout=QVBoxLayout(center);center_layout.setContentsMargins(12,14,12,14);center_layout.setSpacing(0)
@@ -56,11 +59,11 @@ def build_layout(w):
     w.browser_stack.addWidget(w.project_list);w.file_browser=FileBrowser();w.file_browser.back_to_projects.connect(w.show_projects);w.browser_stack.addWidget(w.file_browser)
     center_layout.addWidget(w.browser_stack,1);w.empty_state=label('불러오는 중입니다.','empty');w.empty_state.setAlignment(Qt.AlignCenter);center_layout.addWidget(w.empty_state)
     w.split.addWidget(center)
-    detail=QWidget();detail.setObjectName('details');detail.setMinimumWidth(280);panel_shadow(detail);dl=QVBoxLayout(detail);dl.setContentsMargins(17,20,17,16);dl.setSpacing(12)
+    detail=QWidget();detail.setObjectName('details');detail.setMinimumWidth(280);panel_shadow(detail);dl=QVBoxLayout(detail);dl.setContentsMargins(17,16,17,14);dl.setSpacing(7)
     w.detail_title=label('프로젝트를 선택하세요','detailTitle');w.detail_title.setMaximumHeight(64);dl.addWidget(w.detail_title)
     w.folder_size=label('');dl.addWidget(w.folder_size)
     w.thread_search=QLineEdit();w.thread_search.setPlaceholderText('이 프로젝트의 대화 찾기');w.thread_search.setClearButtonEnabled(True);w.thread_search.textChanged.connect(w.show_detail);dl.addWidget(w.thread_search)
-    w.detail_tabs=QTabWidget();w.detail_tabs.setMinimumHeight(140);dl.addWidget(w.detail_tabs,1)
+    w.detail_tabs=QTabWidget();w.detail_tabs.setMinimumHeight(70);dl.addWidget(w.detail_tabs,1)
     from .dragdrop import ChatDragList
     w.thread_list=ChatDragList();w.thread_list.setWordWrap(True);w.thread_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff);w.thread_list.setSelectionMode(QAbstractItemView.ExtendedSelection);w.thread_list.itemDoubleClicked.connect(w.show_transcript)
     w.detail_tabs.addTab(w.thread_list,'대화')
@@ -85,6 +88,9 @@ def build_layout(w):
         action=QAction(w);action.setShortcut(QKeySequence(sequence));action.triggered.connect(callback);w.addAction(action)
     from .shortcuts import Shortcuts
     w.shortcuts=Shortcuts(w)
+    from .selection import SelectionBar
+    w.selection_bar=SelectionBar(w);content.removeWidget(w.filter_bar)
+    context_row=QHBoxLayout();context_row.addWidget(w.selection_bar,1);context_row.addWidget(w.filter_bar);content.insertLayout(3,context_row)
     from .sorting import HeaderSort
     w.column_sort=HeaderSort(w)
     keys=QPushButton('단축키');keys.clicked.connect(w.shortcuts.help);bottom.addWidget(keys)
