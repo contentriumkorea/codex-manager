@@ -77,6 +77,10 @@ QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #899BB8; bor
 QCheckBox::indicator:hover { border-color: #3865BA; background: #EFF5FF; }
 QCheckBox::indicator:checked { background: #3865BA; border-color: #3865BA; image: url("@UI_DIR@/check.svg"); }
 QCheckBox::indicator:disabled { background: #E5EAF2; border-color: #BDC8D9; }
+QRadioButton { spacing: 8px; padding: 4px 0; }
+QRadioButton::indicator { width: 16px; height: 16px; border: 1px solid #899BB8; border-radius: 9px; background: #FFFFFF; }
+QRadioButton::indicator:checked { background: #3865BA; border-color: #3865BA; }
+QRadioButton::indicator:hover { border-color: #3865BA; }
 QPushButton#danger { color: #A63C4D; border-color: #DEC6CD; background: #FFF8FA; }
 QPushButton#danger:hover { color: #8C2439; border-color: #C997A4; background: #FBEAF0; }
 QPushButton#nav { padding: 7px 10px; }

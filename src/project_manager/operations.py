@@ -137,12 +137,12 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
         return OperationResult('needs_recovery','복사본 유지','복구 확인 필요','원본 파일 유지','모바일 미확인',(str(exc),*rollback_errors),report_id=operation_id)
 
 
-def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:None, cancelled=lambda:False, resume_id=None):
+def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:None, cancelled=lambda:False, resume_id=None, target=None, skip_existing=False):
     adapter.ensure_write_allowed();require(verify_bundle(bundle));m=load_manifest(bundle)
     if m['dependencies']: raise ValueError('외부 첨부·자식 대화·worktree 의존성을 해결한 뒤 가져올 수 있습니다.')
     snapshot=adapter.snapshot();existing={t.id:t for t in snapshot.conversations}
     previous_pid=None
-    intended=set()
+    intended=set(); skipped=set()
     if resume_id:
         pending=next((p for p in journal.pending() if p['id']==resume_id),None)
         if not pending or pending['payload'].get('kind')!='import': raise ValueError('가져오기 복구 작업이 아닙니다.')
@@ -154,8 +154,19 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
             raise ValueError('중단된 작업의 대상 폴더가 다릅니다.')
         previous_pid=next((e['payload'].get('project_id') for e in reversed(journal.events(resume_id)) if e['payload'].get('project_id')),None)
         intended={e['payload']['thread_id'] for e in journal.events(resume_id) if e['phase']=='registering' and 'thread_id' in e['payload']}
-    conflicts=[t['id'] for t in m['conversations'] if t['id'] in existing and (not resume_id or not previous_pid or t['id'] not in intended or existing[t['id']].project_id not in (None,previous_pid))]
+        skipped=set(plan.get('skipped',()))
+        if plan.get('target'):
+            raw=plan['target'];target=next((p for p in snapshot.projects if p.id==raw['id']),None)
+            original=Project(raw['id'],raw['name'],tuple(Path(p) for p in raw['roots']),tuple(raw.get('legacy_ids',())))
+            extra=tuple(Path(p).resolve() for p in destinations.values() if not any(inside(Path(p).resolve(),r.resolve()) for r in original.roots))
+            if not target or (target.id,target.name,target.roots) not in ((original.id,original.name,original.roots),(original.id,original.name,original.roots+extra)):
+                raise ValueError('합칠 프로젝트가 이후 변경됐습니다. 현재 연결을 덮어쓰지 않습니다.')
+            previous_pid=target.id
+    elif skip_existing:
+        skipped={t['id'] for t in m['conversations'] if t['id'] in existing}
+    conflicts=[t['id'] for t in m['conversations'] if t['id'] in existing and t['id'] not in skipped and (not resume_id or not previous_pid or t['id'] not in intended or existing[t['id']].project_id not in (None,previous_pid))]
     if conflicts: raise ValueError('대상 컴퓨터에 같은 ID의 대화가 있습니다. 기존 대화를 덮어쓰지 않습니다: '+', '.join(conflicts))
+    if target and next((p for p in snapshot.projects if p.id==target.id),None)!=target: raise ValueError('합칠 프로젝트가 바뀌었습니다.')
     src={r['id']:safe_child(bundle,r['bundle_path']) for r in m['roots']}
     dest={rid:Path(destinations[rid]).resolve() for rid in src}
     errors=validate_paths(tuple(src.values()),tuple(dest.values()),(adapter.home,))
@@ -173,15 +184,28 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
         entries.append(FileEntry(e['root_id'],e['relative_path'],e['size'],e['sha256'],str(stat.st_ino),stat.st_mtime_ns))
     inv=Inventory(tuple(entries),(),sum(e.size for e in entries),None,tuple(tuple(x) for x in m['directories']))
     operation_id=resume_id or uuid.uuid4().hex
-    if not resume_id: journal.begin(operation_id,{'kind':'import','home':str(adapter.home),'resources':['bundle:'+m['bundle_id']], 'bundle':str(bundle),
-                                                 'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'destinations':dest})
+    project_key=plan.get('project_key','import-'+m['bundle_id']) if resume_id else 'import-'+operation_id
+    if not resume_id: journal.begin(operation_id,{'kind':'import','home':str(adapter.home),'resources':['bundle:'+m['bundle_id']]+([target.id] if target else []), 'bundle':str(bundle),
+                                                 'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'destinations':dest,
+                                                 'target':asdict(target) if target else None,'skipped':sorted(skipped),'project_key':project_key})
     try:
         journal.record(operation_id,'copying',{})
         require(copy_verified(inv,src,dest,progress,cancelled))
         journal.record(operation_id,'verified',{})
-        pid=adapter.create_project(m['project']['name'],tuple(dest.values()),'import-'+m['bundle_id'])
+        if cancelled(): raise ValueError('가져오기를 취소했습니다. 파일 사본과 백업은 유지됩니다.')
+        if target:
+            if next((p for p in adapter.snapshot().projects if p.id==target.id),None)!=target: raise ValueError('합칠 프로젝트가 복사 중 변경됐습니다.')
+            extra=tuple(p for p in dest.values() if not any(inside(p,r.resolve()) for r in target.roots))
+            p=Project(target.id,target.name,target.roots+extra,target.legacy_ids)
+            adapter.update_project(p);pid=p.id
+        else:
+            pid=previous_pid or adapter.create_project(m['project']['name'],tuple(dest.values()),project_key)
+            p=next((p for p in adapter.snapshot().projects if p.id==pid),None)
+            if not p or p.name!=m['project']['name'] or tuple(r.resolve() for r in p.roots)!=tuple(dest.values()):
+                raise ValueError('가져올 프로젝트가 이후 변경됐습니다. 현재 연결을 덮어쓰지 않습니다.')
         journal.record(operation_id,'relinking',{'project_id':pid})
         for t in m['conversations']:
+            if t['id'] in skipped: continue
             if cancelled(): raise ValueError('가져오기를 취소했습니다. 이미 등록한 항목은 작업 기록에서 확인하세요.')
             cwd,runtime=mapped[t['id']]
             if t['id'] not in existing:
@@ -202,14 +226,13 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
             active=next(x for x in adapter.snapshot().conversations if x.id==t['id'])
             if active.parent_id!=t.get('parent_id') or tuple(p.resolve() for p in active.runtime_roots)!=tuple(p.resolve() for p in runtime):
                 raise ValueError('가져온 대화의 부모·작업 폴더를 확인할 수 없습니다.')
-        p=Project(pid,m['project']['name'],tuple(dest.values()))
-        adapter.sync_desktop_state([p],{t['id']:pid for t in m['conversations']})
+        adapter.sync_desktop_state([p],{t['id']:pid for t in m['conversations'] if t['id'] not in skipped})
         reports=adapter.home/'project-manager-import-reports';reports.mkdir(exist_ok=True)
         restored=adapter.snapshot()
         write_json(reports/(m['bundle_id']+'.json'),{'bundle_id':m['bundle_id'],'manifest_digest':digest(bundle/'manifest.json'),'project_id':pid,
-                   'destinations':dest,'threads':{t['id']:{'offset':next(x for x in restored.conversations if x.id==t['id']).rollout.stat().st_size} for t in m['conversations']}})
+                   'destinations':dest,'skipped':sorted(skipped),'merged':bool(target),'threads':{t['id']:{'offset':next(x for x in restored.conversations if x.id==t['id']).rollout.stat().st_size} for t in m['conversations'] if t['id'] not in skipped}})
         journal.record(operation_id,'completed',{})
-        return OperationResult('completed','복원 검증 완료','대화 등록 완료','백업 유지','모바일 미확인',report_id=operation_id)
+        return OperationResult('completed','파일 가져오기 완료',f'대화 {len(m["conversations"])-len(skipped)}개 등록'+(f' · 중복 {len(skipped)}개 기존 기록 유지' if skipped else ''),'백업 유지','모바일 미확인',report_id=operation_id)
     except Exception as exc:
         journal.record(operation_id,'needs_recovery',{'error':str(exc)})
         return OperationResult('needs_recovery','부분 복원','등록 확인 필요','백업 유지','모바일 미확인',(str(exc),),report_id=operation_id)

@@ -1,13 +1,20 @@
 import hashlib,json,subprocess,os
+import pytest
 from pathlib import Path
 from project_manager.bundles import write_json
 
 
-def test_failed_new_executable_restores_previous_folder_and_keeps_settings(tmp_path):
+@pytest.mark.parametrize('prepared_uninstaller',[False,True])
+def test_failed_new_executable_restores_previous_folder_and_keeps_settings(tmp_path,prepared_uninstaller):
     old=tmp_path/'app';old.mkdir();(old/'CodexManager.exe').write_bytes(b'previous-program')
     (old/'user-note.txt').write_text('keep this')
+    (old/'unins000.exe').write_bytes(b'installer uninstaller')
+    (old/'unins000.dat').write_bytes(b'installer file list')
     stage=tmp_path/'.codex-manager-update-test'/'CodexManager';stage.mkdir(parents=True)
     (stage/'CodexManager.exe').write_bytes(b'not an executable')
+    if prepared_uninstaller:
+        (stage/'unins000.exe').write_bytes(b'installer uninstaller')
+        (stage/'unins000.dat').write_bytes(b'installer file list')
     write_json(stage/'install-manifest.json',{'version':'0.3.0','files':{'CodexManager.exe':hashlib.sha256(b'not an executable').hexdigest()}})
     state=tmp_path/'state';updates=state/'updates';updates.mkdir(parents=True)
     (state/'settings.json').write_text('{"home":"unchanged"}')
@@ -23,6 +30,8 @@ def test_failed_new_executable_restores_previous_folder_and_keeps_settings(tmp_p
     assert (state/'settings.json').read_text()=='{"home":"unchanged"}'
     assert json.loads((updates/'last-result.json').read_text(encoding='utf-8'))['state']=='failed'
     assert (tmp_path/'app.failed-test'/'CodexManager.exe').read_bytes()==b'not an executable'
+    assert (tmp_path/'app.failed-test'/'unins000.dat').read_bytes()==b'installer file list'
+    assert (old/'unins000.exe').read_bytes()==b'installer uninstaller'
 
 
 def test_interrupted_first_rename_can_restore_previous_program(tmp_path):

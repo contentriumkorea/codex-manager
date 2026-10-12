@@ -14,6 +14,8 @@ def verify(release_dir,root):
     root.mkdir(parents=True)
     app=root/'프로그램 폴더';app.mkdir();(app/'CodexManager.exe').write_bytes(b'previous program')
     (app/'user-note.txt').write_text('retained user file',encoding='utf-8')
+    (app/'unins000.exe').write_bytes(b'owned fixture uninstaller')
+    (app/'unins000.dat').write_bytes(b'owned fixture uninstall log')
     write_json(app/'install-manifest.json',{'version':'0.1.0','files':{'CodexManager.exe':digest(app/'CodexManager.exe')}})
     state=root/'상태 폴더';home=root/'isolated-home';home.mkdir();state.mkdir()
     settings={'home':str(home),'custom':'retained settings','backups':[],'startup_update_check':False}
@@ -38,6 +40,8 @@ def verify(release_dir,root):
         backup=Path(plan['backup'])
         assert (backup/'user-note.txt').read_text(encoding='utf-8')=='retained user file'
         assert not (backup/'CodexManager.exe').exists()
+        assert (app/'unins000.exe').read_bytes()==b'owned fixture uninstaller'
+        assert (app/'unins000.dat').read_bytes()==b'owned fixture uninstall log'
         actual=json.loads((state/'settings.json').read_text(encoding='utf-8'))
         assert all(actual.get(key)==value for key,value in settings.items())
         assert list((state/'updates').glob('recover-*.cmd'))

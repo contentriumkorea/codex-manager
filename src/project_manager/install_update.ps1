@@ -101,6 +101,20 @@ try {
     foreach ($other in @(Get-Process -Name CodexManager -ErrorAction SilentlyContinue)) {
         if ($other.Id -ne $taskPlan.parent_pid -and $other.Path -and (SamePath $other.Path (Join-Path $installationPath 'CodexManager.exe'))) { throw 'Another app instance is running.' }
     }
+    # Keep the registered Windows uninstaller when applying a portable update.
+    $uninstallFiles=@()
+    foreach ($file in @(Get-ChildItem -LiteralPath $installationPath -File -Force)) {
+        if ($file.Name -match '^unins[0-9]{3}\.(exe|dat|msg)$') {
+            RequireNoLinks $file.FullName
+            $target=Join-Path $stagedPath $file.Name;RequireChild $target $stagedPath;RequireNoLinks $target
+            $hash=FileHash $file.FullName
+            if (Test-Path -LiteralPath $target) {
+                if ((FileHash $target) -ne $hash) { throw 'Changed uninstaller in update payload.' }
+            } else { Copy-Item -LiteralPath $file.FullName -Destination $target }
+            if ((FileHash $target) -ne $hash) { throw 'Uninstaller copy failed verification.' }
+            $uninstallFiles+=@{Name=$file.Name;Hash=$hash}
+        }
+    }
     if ($taskPlan.ready) {
         RequireChild $taskPlan.ready $updateState;RequireNoLinks $taskPlan.ready
         [IO.File]::WriteAllText($taskPlan.ready,(@{id=$taskPlan.id;version=$taskPlan.version;pid=$PID;elapsed_ms=$timer.ElapsedMilliseconds}|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
@@ -124,12 +138,26 @@ try {
         $newProcess.Refresh();if ($newProcess.HasExited) { break };Start-Sleep -Milliseconds 250
     }
     if (!$healthy) { throw 'New application did not report healthy startup.' }
+    # Update only this user's matching installation entry, after startup succeeds.
+    try {
+        $uninstallRoot='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+        foreach ($entry in @(Get-ChildItem -LiteralPath $uninstallRoot -ErrorAction SilentlyContinue)) {
+            $value=Get-ItemProperty -LiteralPath $entry.PSPath
+            if ($value.Publisher -eq 'Contentrium' -and $value.DisplayName -like 'Codex Manager*' -and $value.InstallLocation -and (SamePath $value.InstallLocation $installationPath)) {
+                Set-ItemProperty -LiteralPath $entry.PSPath -Name DisplayVersion -Value $taskPlan.version
+            }
+        }
+    } catch { } # Program remains usable if registry access is unavailable.
     WritePhase 'completed'
     # Remove only hash-verified old program files after replacement starts.
     # Unknown or changed user files remain in the previous directory.
     $cleanupMessage='Update installed and startup verified.'
     try {
       $oldManifestPath=Join-Path $backupPath 'install-manifest.json'
+      foreach ($file in $uninstallFiles) {
+          $path=Join-Path $backupPath $file.Name;RequireChild $path $backupPath;RequireNoLinks $path
+          if ((Test-Path -LiteralPath $path) -and (FileHash $path) -eq $file.Hash) { Remove-Item -LiteralPath $path }
+      }
       if (Test-Path -LiteralPath $oldManifestPath) {
         $oldHash=FileHash $oldManifestPath
         $oldManifest=Get-Content -LiteralPath $oldManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json

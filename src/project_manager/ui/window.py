@@ -114,8 +114,10 @@ class MainWindow(ManagementActions,QMainWindow):
 
     def selected_project(self):
         item=self.project_list.currentItem()
-        if not item or self.mode!='projects': return None
-        return next((p for p in self.snapshot.projects if p.id==item.data(Qt.UserRole)),None)
+        if self.mode!='projects':return None
+        selected=self.selected_projects()
+        if item and item.isSelected():return next((p for p in selected if p.id==item.data(Qt.UserRole)),None)
+        return selected[0] if selected else None
 
     def selected_project_ids(self):
         return tuple(p.id for p in self.selected_projects())
@@ -134,11 +136,11 @@ class MainWindow(ManagementActions,QMainWindow):
         self.show_internal.setVisible(mode in ('projects','unassigned','conversations'))
         self.project_list.setSelectionMode(QAbstractItemView.ExtendedSelection if mode in ('projects','unassigned','conversations') else QAbstractItemView.SingleSelection)
         for b,m in self.nav_buttons: b.setChecked(m==mode)
-        self.heading.setText({'projects':'모든 프로젝트','conversations':'모든 대화','unassigned':'분류할 대화','backups':'백업','recovery':'작업 복구'}[mode])
+        self.heading.setText({'projects':'모든 프로젝트','conversations':'모든 대화','unassigned':'분류할 대화','backups':'보내 둔 백업','recovery':'작업 복구'}[mode])
         self.chat_status.setVisible(mode in ('projects','unassigned','conversations'));self.thread_search.setVisible(mode=='projects')
         self.import_button.setVisible(mode in ('projects','backups'));self.size_status.setVisible(mode=='projects')
-        self.project_actions.setVisible(mode=='projects');self.home_button.hide()
-        self.subtitle.setText({'projects':'Ctrl·Shift로 여러 개 선택 → 왼쪽 프로젝트에 끌어 놓아 합치기 · 열 제목 클릭으로 정렬','conversations':'여러 대화를 선택한 뒤 왼쪽 대상 프로젝트에 끌어 놓으면 함께 옮길 수 있습니다.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 백업을 선택하고 복원할 위치를 지정하세요.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다. 완료·실패 결과는 작업 내역에서 확인하세요.'}[mode])
+        self.project_actions.hide();self.home_button.hide()
+        self.subtitle.setText({'projects':'프로젝트 선택 → 보내기로 파일과 대화를 외장하드에 보관 · 다른 컴퓨터에서는 가져오기','conversations':'여러 대화를 선택한 뒤 왼쪽 대상 프로젝트에 끌어 놓으면 함께 옮길 수 있습니다.','unassigned':'프로젝트 연결이 없는 대화입니다. 보조 에이전트·자동 검토 기록은 내부 작업 기록 포함에서 확인하세요.','backups':'파일과 대화가 함께 담긴 백업입니다. 두 번 클릭하면 이 컴퓨터로 가져올 방법을 선택합니다.','recovery':'삭제한 항목을 되살리거나 중단된 작업을 복구합니다. 완료·실패 결과는 작업 내역에서 확인하세요.'}[mode])
         self.project_list.clear();self.project_list.blockSignals(False)
         self.footer.setText('Ctrl·Shift로 여러 개 선택 · Ctrl+A 전체 선택 · F2 이름 변경 · Delete 삭제' if mode in ('projects','conversations','unassigned') else '항목을 선택하면 오른쪽에서 상세 작업을 확인할 수 있습니다.')
         self.filter_list()
@@ -196,7 +198,7 @@ class MainWindow(ManagementActions,QMainWindow):
         menu.exec(self.project_list.viewport().mapToGlobal(point))
 
     def show_help(self):
-        QMessageBox.information(self,'Codex Manager 사용 안내','1. 프로젝트를 두 번 클릭하면 파일과 폴더가 열립니다.\n2. 오른쪽 대화를 두 번 클릭하면 내용을 읽을 수 있습니다.\n3. 프로젝트를 선택하고 옮기기·합치기·백업 만들기를 누르세요.\n4. 프로젝트 우클릭으로 이름 변경·삭제를 할 수 있습니다.\n5. 대화는 Ctrl·Shift로 여러 개 선택하고 대화 관리에서 제목 변경·이동·삭제합니다.\n6. 삭제한 항목은 작업 복구에서 되살릴 수 있습니다.\n\n외장하드에 보관하기\n백업 만들기 → 외장하드 선택. 파일과 대화를 함께 보관합니다.\n\n다른 컴퓨터로 가져오기\n백업 가져오기 → 백업 폴더 선택 → 이 백업 복원하기.\n\n원본 정리\n복원한 대화에서 실제로 이어 쓴 뒤 백업의 복원 상태를 확인하세요. 확인을 마치면 원래 프로젝트의 더 보기에서 원본을 정리할 수 있습니다.\n\n이동·합치기·복원은 Codex 앱을 종료한 상태에서 진행하세요.\nCtrl+F 검색 · F5 새로고침 · Alt+← 뒤로')
+        QMessageBox.information(self,'Codex Manager 사용 안내','다른 컴퓨터로 옮기기\n1. 프로젝트 선택 → 보내기 → 외장하드 폴더 선택\n2. 다른 컴퓨터에 Codex Manager 설치 → 가져오기\n3. 백업이 들어 있는 상위 폴더 선택 → 자동으로 찾은 프로젝트 확인\n4. 새 프로젝트로 만들지, 기존 프로젝트에 합칠지 선택 → 가져오기 시작\n원래 컴퓨터와 외장하드의 내용은 그대로 보존합니다.\n\n삭제하기\n프로젝트나 대화 선택 → 삭제 (Delete)\n• 복구 가능 삭제: 복구 사본 자동 보관. 작업 내역에서 되돌리기\n• 완전 삭제: 복구 사본 없이 삭제. 되돌릴 수 없음\n작업 파일까지 지우려면 별도로 체크하세요.\n\n파일 탐색·정리\n프로젝트 두 번 클릭 → 파일 탐색\n대화 두 번 클릭 → 내용 읽기\nCtrl·Shift로 여러 개 선택 → 대상 프로젝트에 끌어 놓기\n이름 변경 F2 · 복사 Ctrl+C · 잘라내기 Ctrl+X · 붙여넣기 Ctrl+V\n\n프로젝트·대화 연결 변경과 가져오기·삭제는 Codex 앱을 종료한 뒤 진행하세요. 조회와 보내기는 앱 실행 중에도 가능합니다.')
 
     def update_empty_state(self):
         empty=self.project_list.count()==0 and self.browser_stack.currentWidget()==self.project_list
@@ -266,7 +268,7 @@ class MainWindow(ManagementActions,QMainWindow):
         selected_threads={i.data(Qt.UserRole) for i in self.thread_list.selectedItems()}
         self.folder_list.clear();self.thread_list.clear();self.detail_status.setText('');self.folder_size.setText('');self.confirm_links.hide();self.active_bundle=None
         self.bundle_action.setVisible(self.mode=='backups');self.proof_action.setVisible(self.mode=='backups');self.recovery_action.setVisible(self.mode=='recovery')
-        self.assign_action.setVisible(self.mode=='unassigned')
+        self.assign_action.hide()
         p=self.selected_project()
         self.open_button.setEnabled(p is not None);self.more.setEnabled(p is not None)
         self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False);self.assign_action.setEnabled(bool(self.project_list.selectedItems()));self.recovery_action.setEnabled(self.project_list.currentItem() is not None)
@@ -314,7 +316,7 @@ class MainWindow(ManagementActions,QMainWindow):
                     for r in m['roots']: self.folder_list.addItem(r['original_path'])
                     for t in m['conversations']:
                         i=QListWidgetItem(t['title']);i.setData(Qt.UserRole,t['id']);self.thread_list.addItem(i)
-                    self.detail_status.setText('① 이 백업 복원하기 → 새 폴더 선택\n② Codex에서 복원한 대화 이어쓰기\n③ 복원 상태 확인 → 원래 컴퓨터에서 원본 정리')
+                    self.detail_status.setText('가져오기를 누르면 새 프로젝트로 만들거나 기존 프로젝트에 합칠 수 있습니다. 백업 원본은 유지됩니다.')
                 except Exception as exc:
                     self.detail_status.setText('백업을 연결하거나 파일 상태를 확인하세요.\n'+str(exc))
                     self.bundle_action.setEnabled(False);self.proof_action.setEnabled(False)
@@ -403,7 +405,7 @@ class MainWindow(ManagementActions,QMainWindow):
 
     def visible_conversations(self,query='',project_only=False):
         names={p.id:p.name for p in self.snapshot.projects};query=query.casefold().strip()
-        status=self.chat_status.currentIndex();result=[]
+        status=self.chat_status.currentIndex() if self.mode in ('conversations','unassigned') else 0;result=[]
         for t in self.snapshot.conversations:
             if t.internal and not self.show_internal.isChecked():continue
             if status==1 and t.archived or status==2 and not t.archived:continue
@@ -539,7 +541,7 @@ class MainWindow(ManagementActions,QMainWindow):
         if self.shortcuts.busy():return
         projects=tuple(projects) if projects is not None else self.selected_projects()
         if not projects:return
-        parent=QFileDialog.getExistingDirectory(self,'백업을 저장할 폴더')
+        parent=QFileDialog.getExistingDirectory(self,'다른 컴퓨터로 보낼 백업 저장 위치 (외장하드 권장)')
         if not parent: return
         stamp=datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d_%H%M%S')
         reserved=set();plans=[]
@@ -550,7 +552,7 @@ class MainWindow(ManagementActions,QMainWindow):
                 destination=Path(parent)/(safe+'_'+stamp+f' ({n})');n+=1
             reserved.add(str(destination).casefold());plans.append((p,destination))
         preview='\n\n'.join(f'{p.name} · 대화 {len(self.project_threads(p.id))}개 · 폴더 {len(p.roots)}개\n{destination}' for p,destination in plans)
-        if not confirm(self,'프로젝트 백업',preview+'\n\n파일과 대화를 함께 복사하고 검증합니다. 원본은 유지합니다.'):return
+        if not confirm(self,'다른 컴퓨터로 보내기',preview+'\n\n파일과 대화를 함께 복사하고 검증합니다. 원본은 유지합니다.\n다른 컴퓨터에서 가져오기를 누르고 이 상위 폴더를 선택하면 됩니다.'):return
         def done(result):
             report=self.journal.operation(result.report_id)
             verified=[Path(item['destinations'][0]) for item in report['payload']['items'] if item['status']=='completed']
@@ -561,7 +563,9 @@ class MainWindow(ManagementActions,QMainWindow):
                     if self.project_list.item(n).data(Qt.UserRole)==str(verified[-1]):self.project_list.setCurrentRow(n);break
             if callback:callback(result)
             else:
-                self.open_activity().show_result(result);self.footer.setText(result.file_status)
+                if result.state=='completed':QMessageBox.information(self,'보내기 완료','대화와 파일을 함께 저장하고 검증했습니다.\n\n'+str(parent)+'\n\n다른 컴퓨터에서 Codex Manager 설치 → 가져오기 → 위 폴더 선택\n원래 컴퓨터의 내용은 그대로 남아 있습니다.')
+                else:self.open_activity().show_result(result)
+                self.footer.setText(result.file_status)
         from .batch import run_backups
         adapter=self.adapter
         self.run_job('대화와 파일 백업',lambda worker:run_backups(adapter,plans,self.journal,export_project,worker.progress.emit,worker.cancelled.is_set,retry_of),done)
@@ -641,28 +645,39 @@ class MainWindow(ManagementActions,QMainWindow):
         self.run_job('백업을 확인하고 원본 정리',lambda w:cleanup_export(p,bundle,self.adapter,self.journal),self.show_result)
 
     def open_backup(self):
-        folder=QFileDialog.getExistingDirectory(self,'Codex Manager로 만든 백업 폴더 선택')
+        if self.shortcuts.busy():return
+        folder=QFileDialog.getExistingDirectory(self,'백업이 들어 있는 폴더 선택 (외장하드의 상위 폴더도 가능)')
         if not folder: return
-        bundle=Path(folder)
-        def done(check):
-            if not check.ok: QMessageBox.warning(self,'백업 검증','\n'.join(check.errors));return
-            if bundle not in self.backups: self.backups.append(bundle)
-            self.save_settings()
-            self.search.clear();self.set_mode('backups')
-            for n in range(self.project_list.count()):
-                if self.project_list.item(n).data(Qt.UserRole)==str(bundle):self.project_list.setCurrentRow(n);break
-        self.run_job('백업 파일 검증',lambda w:verify_bundle(bundle),done)
+        from ..migration import discover_bundles
+        self.run_job('폴더 안의 프로젝트 백업 찾는 중',lambda worker:discover_bundles(Path(folder),worker.cancelled.is_set),self.review_import)
 
     def restore(self):
-        if not self.active_bundle or not self.guard_change(): return
+        if not self.active_bundle or self.shortcuts.busy():return
+        from ..migration import discover_bundles
         bundle=self.active_bundle
-        try: m=load_manifest(bundle)
-        except (ValueError,OSError) as exc: QMessageBox.warning(self,'백업 확인','백업을 다시 연결하거나 확인하세요.\n'+str(exc));return
-        parent=QFileDialog.getExistingDirectory(self,'복원할 상위 폴더')
-        if not parent: return
-        destinations={r['id']:(Path(parent)/clean_path(r['original_path']).name if len(m['roots'])==1 else Path(parent)/r['id']/clean_path(r['original_path']).name) for r in m['roots']}
-        if not confirm(self,'백업 가져오기',m['project']['name']+'\n\n'+'\n'.join(str(p) for p in destinations.values())+'\n\n파일을 복원하고 대화를 이 컴퓨터의 Codex에 등록합니다.'): return
-        self.run_job('프로젝트 복원',lambda w:import_bundle(bundle,destinations,self.adapter,self.journal,w.progress.emit,w.cancelled.is_set),self.show_result)
+        self.run_job('백업 내용 읽는 중',lambda worker:discover_bundles(bundle,worker.cancelled.is_set),self.review_import)
+
+    def review_import(self,discovery):
+        if self.workers:QTimer.singleShot(20,lambda:self.review_import(discovery));return
+        if not discovery.bundles:
+            QMessageBox.information(self,'가져올 백업 없음','Codex Manager의 보내기로 만든 백업을 찾지 못했습니다.\n백업이 들어 있는 다른 상위 폴더를 선택하세요.\n\n'+'\n'.join(discovery.errors[:5]));return
+        from .migration import ImportDialog
+        from ..migration import run_imports
+        dialog=ImportDialog(self,discovery)
+        if dialog.exec()!=QDialog.Accepted:return
+        plans=dialog.plans();skip=dialog.skip.isChecked()
+        if not plans or not self.guard_change():return
+        save_settings(self.state_dir/'settings.json',{'import_directory':dialog.destination.text()})
+        def done(result):
+            report=self.journal.operation(result.report_id)
+            for plan,item in zip(plans,report['payload']['items'] if report else []):
+                if item['status']=='completed' and plan.bundle.path not in self.backups:self.backups.append(plan.bundle.path)
+            self.save_settings();self.set_mode('projects')
+            if result.state=='completed':
+                QMessageBox.information(self,'가져오기 완료',result.file_status+'\n\nCodex 앱을 다시 열면 가져온 프로젝트와 대화를 확인할 수 있습니다.\n외장하드의 백업은 그대로 보관됩니다.')
+                self.footer.setText(result.file_status);QTimer.singleShot(50,self.reload)
+            else:self.show_result(result)
+        self.run_job('파일과 대화 가져오기',lambda worker:run_imports(plans,self.adapter,self.journal,skip,worker.progress.emit,worker.cancelled.is_set),done)
 
     def show_recovery(self,operation_id=None):
         if self.shortcuts.busy():return

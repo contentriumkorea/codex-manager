@@ -1,29 +1,59 @@
 # Codex Manager
 
-파일 탐색기처럼 사용하는 Windows용 Codex 프로젝트·대화·폴더 관리 도구. 화이트·실버 글래스모피즘 UI로 이동, 합치기, 연결 관리, 대화 포함 백업과 새 경로 복원을 제공합니다. 블루·라벤더 배경과 반투명 패널, 선명한 차콜 글자를 사용하며 메뉴·확인창·업데이트 화면도 밝은 톤으로 통일했습니다.
+## [⬇ Windows 설치 프로그램 다운로드](https://github.com/contentriumkorea/codex-manager/releases/latest/download/Codex-Manager-Setup.exe)
 
-프로젝트·대화 우클릭으로 이름 변경과 삭제를 처리합니다. 여러 대화를 선택해 다른 프로젝트로 이동하거나 삭제할 수 있습니다. 삭제 전 복구 사본을 검증하고, 작업 복구에서 되살립니다. 실제 작업 파일 삭제는 별도 선택이며 기본값은 파일 유지입니다.
+**위 링크를 누르면 설치 파일을 바로 받습니다.** 받은 `Codex-Manager-Setup.exe`를 실행한 뒤 시작 메뉴에서 **Codex Manager**를 검색하세요. Python 설치나 압축 해제가 필요 없습니다. 설치할 드라이브와 폴더도 선택할 수 있습니다.
 
-왼쪽 프로젝트 트리에서 폴더를 바로 열고, 즐겨찾기로 자주 쓰는 프로젝트를 모읍니다. 여러 항목을 선택하면 이동·합치기·일괄 백업 등 해당 항목의 작업바가 나타납니다. 대화와 파일을 왼쪽 대상 프로젝트에 끌어 놓을 수 있습니다. **작업 내역 · 복구**에서는 완료·실패·미실행 항목과 변경된 위치를 확인하고, 미완료 항목만 재시도합니다. 실행 도중 종료돼도 항목별 기록을 유지합니다.
+Codex의 프로젝트·대화·작업 파일을 함께 정리하고, 외장하드에 보관하거나 다른 컴퓨터로 가져오는 Windows 앱입니다.
 
-전체 프로젝트 용량을 자동 계산해 큰 순으로 표시합니다. 명시적 소속이 없는 옛 대화는 폴더·부모 관계로 분류하고, 여러 Codex 저장소를 자동 검색·등록해 전환할 수 있습니다. 폴더 기준 분류는 원본 소속과 구분하고, 변경·정리 전에 연결을 확정합니다.
+![Codex Manager 화면](docs/images/manager.png)
 
-사용자는 [GitHub Releases](https://github.com/contentriumkorea/codex-manager/releases/latest)에서 Windows ZIP을 내려받아 압축을 풀고, `CodexManager` 폴더의 `CodexManager.exe`를 실행합니다. 폴더 전체를 보관하세요. [사용 안내](docs/user-guide.md)를 참고하세요.
+### 다른 컴퓨터로 옮기기
 
-시작할 때 최신 정식 버전을 확인하고 새 버전을 미리 다운로드·검증합니다. **지금 업데이트**를 누르면 바로 설치·재시작합니다. 다운로드 중에 누르면 진행률을 보여주며 준비되는 즉시 자동 설치합니다. 진행 중인 프로젝트 작업은 완료를 기다립니다. 앱의 **업데이트** 메뉴에서 수동 확인, 재시도, 준비 취소와 시작 시 확인 설정을 제공합니다. 설치 도우미의 준비 응답을 받은 뒤 앱을 닫고, 새 프로그램이 정상 시작하지 않으면 이전 프로그램으로 복구합니다.
+1. **원래 컴퓨터:** 프로젝트 선택 → **보내기…** → 외장하드 폴더 선택.
+2. **다른 컴퓨터:** Codex와 Codex Manager 설치 → **가져오기…** → 백업이 들어 있는 상위 폴더 선택.
+3. 자동으로 찾은 프로젝트를 선택하고 **새 프로젝트로 가져오기** 또는 **기존 프로젝트에 합치기**를 고릅니다. 저장 위치를 확인하고 시작하세요.
 
-프로젝트·대화·작업 파일·백업을 프로그램 배포에 넣지 않습니다. 기존 설정 위치 `%LOCALAPPDATA%/ProjectConversationManager`를 유지합니다. 로컬 Codex용 독립 도구이며 OpenAI 공식 제품은 아닙니다.
+파일과 대화를 함께 옮깁니다. 기존 프로젝트에 합치면 그 프로젝트의 이름을 유지합니다. 파일은 별도 폴더에 들어가며, 같은 대화가 이미 있으면 기존 기록을 유지하도록 선택할 수 있습니다. 원래 컴퓨터와 외장하드의 내용은 자동으로 삭제하지 않습니다.
 
-개발:
+### 삭제와 정리
+
+- **삭제… / Delete:** 복구 가능 삭제 또는 완전 삭제를 선택합니다. 작업 파일 삭제는 별도 체크입니다.
+- **복구 가능 삭제:** 이 컴퓨터에 복구 사본을 자동 저장합니다. 보관 위치를 매번 고를 필요가 없습니다.
+- **완전 삭제:** 복구 사본과 휴지통 없이 삭제합니다. 확인 체크 후 실행하며 되돌릴 수 없습니다.
+- **이름 변경 / F2**, 여러 항목 선택, 끌어 놓기, 열 제목 클릭 정렬을 지원합니다. 추가 관리 기능은 **더 보기**와 우클릭 메뉴에 있습니다.
+
+프로젝트 연결 변경·가져오기·삭제는 Codex 앱을 종료한 뒤 진행합니다. 조회와 보내기는 Codex 실행 중에도 사용할 수 있습니다.
+
+### 업데이트
+
+시작할 때 새 버전을 확인하고 미리 다운로드·검증합니다. **지금 업데이트**를 누르면 준비된 버전을 설치하고 다시 실행합니다. 왼쪽 **업데이트**에서도 확인할 수 있습니다. 설정, 대화, 작업 파일과 백업은 유지합니다.
+
+[사용 안내](docs/user-guide.md) · [변경 내용](https://github.com/contentriumkorea/codex-manager/releases/latest) · [문제 신고](https://github.com/contentriumkorea/codex-manager/issues)
+
+<details>
+<summary>설치 없이 사용하는 포터블 버전</summary>
+
+[포터블 ZIP 다운로드](https://github.com/contentriumkorea/codex-manager/releases/latest/download/Codex-Manager-Windows-x64.zip) → 압축 해제 → `CodexManager/CodexManager.exe` 실행. 실행 파일과 `_internal`을 포함한 폴더 전체를 함께 보관하세요. 처음 사용하는 경우 위의 설치 프로그램을 권장합니다.
+
+</details>
+
+<details>
+<summary>개발과 검증</summary>
 
 ```powershell
-.venv/Scripts/python.exe -m pytest tests -q
+.venv/Scripts/python.exe -m pytest -q
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
 .venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.9.0 --root .test-artifacts/update-verification
+.venv/Scripts/python.exe tools/build_setup.py --compiler "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" --dist dist/CodexManager --output releases/v0.10.0
+.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.10.0 --root .test-artifacts/update-verification
 .venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
 ```
 
-실제 계정 이어쓰기·두 번째 물리 PC·모바일은 외부 검수 대기입니다. `--fixture-only` 없이 검수 도구를 실행하면 해당 미실시를 보고하고 종료 코드 2를 반환합니다. 원본 데이터는 구현 검증에서 변경하지 않았습니다.
+정식 배포는 `vX.Y.Z` 태그에 설치 프로그램, 포터블 ZIP, `update.json`, `SHA256SUMS.txt`를 함께 게시합니다. 앱 업데이트는 ZIP을 사용합니다. Windows 설치 프로그램은 [Inno Setup](https://jrsoftware.org/)으로 만듭니다.
 
-정식 배포는 `vX.Y.Z` 태그와 `Codex-Manager-Windows-x64.zip`, `update.json`, `SHA256SUMS.txt`를 함께 게시합니다. 버전을 올릴 때 `src/project_manager/version.py`와 `pyproject.toml`을 함께 수정하고 실행 파일을 새로 빌드하세요. 초안·사전 배포는 업데이트 채널에 포함하지 않습니다.
+[호환성 및 검증 범위](docs/compatibility.md). 실제 계정 이어쓰기·두 번째 물리 PC·모바일은 별도 검수가 필요합니다. 자동 검증은 격리 저장소를 사용하며 사용자 원본을 삭제하지 않습니다.
+
+</details>
+
+로컬 Codex용 독립 도구이며 OpenAI 공식 제품은 아닙니다.

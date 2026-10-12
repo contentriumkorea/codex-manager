@@ -1,30 +1,48 @@
 """Explicit project and conversation management actions for the explorer."""
 from pathlib import Path
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog,QVBoxLayout,QLabel,QPlainTextEdit,QCheckBox,
+from PySide6.QtWidgets import (QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPlainTextEdit,QCheckBox,QRadioButton,QPushButton,
     QDialogButtonBox,QInputDialog,QFileDialog,QMessageBox,QMenu,QListWidgetItem,QApplication)
-from ..management import rename_project,rename_thread,rename_threads,move_threads,plan_delete,delete_items
+from ..management import rename_project,rename_thread,rename_threads,move_threads,plan_delete,delete_items,delete_permanently
 
 from .naming import RenameDialog,ProjectPicker
 
 
 class DeleteDialog(QDialog):
     def __init__(self,parent,plan):
-        super().__init__(parent);self.setWindowTitle('프로젝트 삭제' if plan.project else '대화 삭제');self.resize(530,410)
+        super().__init__(parent);self.setWindowTitle('프로젝트 삭제' if plan.project else '대화 삭제');self.resize(580,510)
+        self.recovery_path=parent.state_dir/'deleted-items'
         layout=QVBoxLayout(self)
         text=(f'프로젝트 «{plan.project.name}»와 대화 {len(plan.threads)}개' if plan.project else f'대화 {len(plan.threads)}개')+'를 Codex에서 삭제합니다.'
         label=QLabel(text);label.setWordWrap(True);layout.addWidget(label)
         listing=QPlainTextEdit();listing.setReadOnly(True)
         listing.setPlainText('\n'.join(t.title or t.id for t in plan.threads) or '연결된 대화 없음');layout.addWidget(listing)
         self.files=QCheckBox('연결된 실제 작업 폴더와 파일도 삭제');self.files.setChecked(False);self.files.setVisible(plan.project is not None);layout.addWidget(self.files)
-        note=QLabel('작업 파일은 기본적으로 유지합니다. 삭제 전에 복구 사본을 만듭니다.\n삭제한 항목은 왼쪽 작업 복구에서 되살릴 수 있습니다.');note.setWordWrap(True);layout.addWidget(note)
+        self.recoverable=QRadioButton('복구 가능 삭제 — 이 컴퓨터에 복구 사본 자동 보관');self.recoverable.setChecked(True);layout.addWidget(self.recoverable)
+        self.permanent=QRadioButton('완전 삭제 — 사본을 만들지 않고 삭제');layout.addWidget(self.permanent)
+        self.recovery_row=QHBoxLayout();self.recovery_label=QLabel('자동 저장 · 작업 내역에서 되돌리기 가능');self.recovery_label.setWordWrap(True);self.recovery_row.addWidget(self.recovery_label,1)
+        self.location_button=QPushButton('보관 위치 변경…');self.location_button.clicked.connect(self.choose_recovery);self.recovery_row.addWidget(self.location_button);layout.addLayout(self.recovery_row)
+        self.note=QLabel('다른 컴퓨터로 옮기려면 먼저 보내기를 사용하세요. 복구 사본은 이 컴퓨터에서 되돌리기 위한 용도입니다.');self.note.setWordWrap(True);layout.addWidget(self.note)
+        self.acknowledge=QCheckBox('선택한 항목을 되돌릴 수 없다는 것을 확인했습니다.');layout.addWidget(self.acknowledge)
         if plan.project:
             roots=QLabel('\n'.join(str(p) for p in plan.project.roots));roots.setWordWrap(True);layout.addWidget(roots)
-        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
+        self.buttons=buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText('삭제');buttons.button(QDialogButtonBox.Cancel).setText('취소')
         buttons.button(QDialogButtonBox.Ok).setObjectName('danger')
         buttons.button(QDialogButtonBox.Cancel).setDefault(True)
         buttons.accepted.connect(self.accept);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
+        self.permanent.toggled.connect(self.sync);self.acknowledge.toggled.connect(self.sync);self.sync()
+
+    def choose_recovery(self):
+        path=QFileDialog.getExistingDirectory(self,'복구 사본을 보관할 폴더 (선택 사항)',str(self.recovery_path.parent))
+        if path:self.recovery_path=Path(path)/'Codex-Manager-Recovery';self.recovery_label.setText(str(self.recovery_path))
+
+    def sync(self):
+        permanent=self.permanent.isChecked();self.acknowledge.setVisible(permanent)
+        self.location_button.setVisible(not permanent);self.recovery_label.setVisible(not permanent)
+        self.note.setText('복구 사본과 휴지통 없이 삭제합니다. 별도로 만들어 둔 백업과 외부 첨부 파일은 유지됩니다.' if permanent else '다른 컴퓨터로 옮기려면 먼저 보내기를 사용하세요. 복구 사본은 이 컴퓨터에서 되돌리기 위한 용도입니다.')
+        self.buttons.button(QDialogButtonBox.Ok).setText('완전 삭제' if permanent else '복구 가능 삭제')
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(not permanent or self.acknowledge.isChecked())
 
 
 class ManagementActions:
@@ -84,14 +102,14 @@ class ManagementActions:
         project=self.selected_project()
         if len(self.selected_projects())>1:
             QMessageBox.information(self,'프로젝트 선택','이 작업은 프로젝트 하나를 선택하세요. 여러 프로젝트 이동·합치기는 함께 처리할 수 있습니다.');return
-        if not project or not self.guard_change():return
+        if not project or self.shortcuts.busy():return
         try:plan=plan_delete(self.snapshot,project_id=project.id,inferred=tuple(t.id for t in self.folder_threads(project.id)))
         except ValueError as exc:QMessageBox.warning(self,'삭제 확인',str(exc));return
         self.confirm_delete(plan)
 
     def delete_selected_threads(self,ids=None):
         threads=self.selected_threads(ids)
-        if not threads or not self.guard_change():return
+        if not threads or self.shortcuts.busy():return
         try:plan=plan_delete(self.snapshot,thread_ids=tuple(t.id for t in threads))
         except ValueError as exc:QMessageBox.warning(self,'삭제 확인',str(exc));return
         self.confirm_delete(plan)
@@ -99,12 +117,12 @@ class ManagementActions:
     def confirm_delete(self,plan):
         dialog=DeleteDialog(self,plan)
         if dialog.exec()!=QDialog.Accepted:return
-        files=dialog.files.isChecked();recovery=self.state_dir/'deleted-items'
-        if files:
-            folder=QFileDialog.getExistingDirectory(self,'삭제 전 복구 사본 저장 위치 (외장하드 권장)')
-            if not folder:return
-            recovery=Path(folder)/'Codex-Manager-Recovery'
-        self.run_job('복구 사본 검증 후 삭제',lambda w:delete_items(self.adapter,plan,self.journal,recovery,files,w.progress.emit,w.cancelled.is_set),self.show_result)
+        if not self.guard_change():return
+        files=dialog.files.isChecked()
+        if dialog.permanent.isChecked():
+            self.run_job('선택한 항목 완전 삭제',lambda w:delete_permanently(self.adapter,plan,self.journal,files,w.progress.emit,w.cancelled.is_set),self.show_result)
+        else:
+            self.run_job('복구 사본 검증 후 삭제',lambda w:delete_items(self.adapter,plan,self.journal,dialog.recovery_path,files,w.progress.emit,w.cancelled.is_set),self.show_result)
 
     def thread_context_menu(self,point):
         item=self.thread_list.itemAt(point)

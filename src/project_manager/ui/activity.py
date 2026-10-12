@@ -21,7 +21,7 @@ def resources(operation):
 
 def related_pending(operation, journal):
     p = operation['payload']; home = Path(p.get('home', ''))
-    return [r for r in journal.pending() if Path(r['payload'].get('home', '')) == home and (r['id'] == operation['id'] or resources(r) & resources(operation))]
+    return [r for r in journal.pending() if Path(r['payload'].get('home', '')) == home and (r['id'] == operation['id'] or r['payload'].get('parent_report')==operation['id'] or resources(r) & resources(operation))]
 
 
 def retry_candidates(operation, journal):
@@ -134,6 +134,7 @@ class ActivityDialog(QDialog):
             texts.append('완료한 이동·합치기는 자동 되돌리기를 지원하지 않습니다. 현재 프로젝트에서 새 이동 작업을 시작할 수 있습니다.')
         if p.get('kind') == 'batch-summary': texts.append('미실행 항목은 변경하지 않았습니다. 재시도 시 현재 프로젝트와 새 저장 위치를 다시 확인합니다.')
         if p.get('action') == 'backup': texts.append('검증이 끝난 백업만 백업 목록에 등록합니다. 실패한 위치의 일부 파일은 유지되며, 재시도는 새 위치에 저장합니다.')
+        if p.get('action') == 'permanent-delete': texts.append('완전 삭제는 복구 사본을 만들지 않습니다. 이미 삭제한 항목은 되돌릴 수 없습니다. 실패한 경우 목록을 새로고침해 남은 항목을 확인하세요.')
         if any(e['payload'].get('retry_report') for e in events): texts.append('이 내역은 이미 재시도했습니다. 가장 최근 작업 내역에서 결과를 확인하세요.')
         for change in p.get('changes', []): texts.append(str(change.get('old_name', '')) + ' → ' + str(change.get('new_name', '')))
         if p.get('old_name') is not None: texts.append(str(p['old_name']) + ' → ' + str(p.get('new_name', '')))

@@ -84,7 +84,7 @@ class Journal:
         p=operation['payload']
         if p.get('kind')!='batch-summary':return operation
         for index,item in enumerate(p.get('items',[])):
-            if item['status']!='in_progress':continue
+            if item['status']!='in_progress' and not (p.get('action')=='import' and item['status']=='needs_recovery'):continue
             if p.get('action')=='backup':
                 saved=c.execute("SELECT 1 FROM events WHERE operation_id=? AND phase='backup-verified' AND json_extract(payload,'$.index')=? LIMIT 1",(operation['id'],index)).fetchone()
                 if saved or self.backup_committed(item):
@@ -93,15 +93,16 @@ class Journal:
                         c.execute('INSERT INTO events(operation_id,phase,payload) VALUES (?,?,?)',(operation['id'],'backup-verified',json.dumps({'index':index})))
                     item['status']='completed';continue
             children=[(state,json.loads(payload),key) for key,state,payload in c.execute("SELECT id,state,payload FROM operations WHERE json_extract(payload,'$.parent_report')=? AND json_extract(payload,'$.parent_index')=? ORDER BY rowid",(operation['id'],index))]
-            transfers=[(state,payload,key) for state,payload,key in children if payload.get('kind') in ('move','merge')]
+            transfers=[(state,payload,key) for state,payload,key in children if payload.get('kind') in ('move','merge','import')]
             if transfers and transfers[-1][0]=='completed':
                 recovered=c.execute("SELECT 1 FROM events WHERE operation_id=? AND json_extract(payload,'$.recovered')=1 LIMIT 1",(transfers[-1][2],)).fetchone()
                 item['status']='failed' if recovered else 'completed'
+                if item['status']=='completed':item['errors']=[]
             elif any(state not in ('completed','cancelled') for state,_,_ in children):item['status']='needs_recovery'
             else:item['status']='failed'
             if item['status']!='completed':item['errors']=['작업 도중 종료됐습니다. 현재 파일과 연결을 확인한 뒤 다시 시도하세요.']
-        if p.get('result_state')=='running':
-            p['result_state']='completed' if all(i['status']=='completed' for i in p['items']) else 'interrupted'
+        if p.get('result_state')=='running' or p.get('action')=='import' and p.get('result_state') in ('needs_recovery','interrupted'):
+            p['result_state']='completed' if all(i['status']=='completed' for i in p['items']) else 'needs_recovery' if any(i['status']=='needs_recovery' for i in p['items']) else 'interrupted'
         return operation
 
     @staticmethod

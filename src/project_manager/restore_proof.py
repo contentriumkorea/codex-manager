@@ -16,9 +16,13 @@ def verify_restored_bundle(bundle,adapter):
         if not report_path.exists(): raise ValueError('이 컴퓨터에 해당 백업을 가져온 기록이 없습니다.')
         report=json.loads(report_path.read_text(encoding='utf-8'))
         if report.get('manifest_digest')!=digest(bundle/'manifest.json'): raise ValueError('다른 백업의 복원 기록입니다.')
+        if report.get('skipped'): raise ValueError('중복 대화를 기존 기록으로 유지한 가져오기입니다. 원본 자동 정리용 전체 복원 확인은 사용할 수 없습니다.')
         snapshot=adapter.snapshot();threads={t.id:t for t in snapshot.conversations}
         project=next((p for p in snapshot.projects if p.id==report['project_id']),None)
-        if not project or tuple(p.resolve() for p in project.roots)!=tuple(Path(report['destinations'][r['id']]).resolve() for r in m['roots']):
+        expected=tuple(Path(report['destinations'][r['id']]).resolve() for r in m['roots'])
+        roots=tuple(p.resolve() for p in project.roots) if project else ()
+        valid=all(any(p.is_relative_to(root) for root in roots) for p in expected) if report.get('merged') else roots==expected
+        if not project or not valid:
             raise ValueError('복원된 프로젝트의 폴더 연결이 바뀌었습니다.')
         from .operations import map_path
         from .catalog import clean_path

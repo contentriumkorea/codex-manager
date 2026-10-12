@@ -119,7 +119,6 @@ def plan_delete(snapshot,project_id=None,thread_ids=(),inferred=()):
     if any(t.running for t in threads):raise ValueError('실행 중인 대화가 있습니다. 작업 종료 후 삭제하세요.')
     if project and any(t.project_id not in (None,project.id) for t in threads):
         raise ValueError('다른 프로젝트의 자식 대화가 있습니다. 대화별로 범위를 확인하세요.')
-    if any(t.attachments for t in threads):raise ValueError('외부 첨부가 연결된 대화는 안전한 복원이 확인되지 않아 삭제할 수 없습니다.')
     return DeletePlan(project,threads,requested,tuple(inferred))
 
 
@@ -145,6 +144,7 @@ def check_file_ownership(snapshot,plan,roots):
 def delete_items(adapter,plan,journal,recovery_root,delete_files=False,progress=lambda *_:None,cancelled=lambda:False):
     adapter.ensure_write_allowed();snapshot=deletion_current(adapter,plan)
     plan=plan_delete(snapshot,plan.project.id if plan.project else None,plan.requested,plan.inferred)
+    if any(t.attachments for t in plan.threads):raise ValueError('외부 첨부가 연결된 대화는 복구 가능 삭제를 지원하지 않습니다. 외부 파일을 유지하는 완전 삭제를 선택할 수 있습니다.')
     if cancelled():raise ValueError('삭제를 취소했습니다.')
     if delete_files and not plan.project:raise ValueError('파일 삭제는 프로젝트에서만 선택하세요.')
     roots={f'root-{i+1:02d}':p for i,p in enumerate(plan.project.roots)} if delete_files else {}
@@ -195,6 +195,61 @@ def delete_items(adapter,plan,journal,recovery_root,delete_files=False,progress=
     except Exception as exc:
         journal.record(op,'needs_recovery',{'error':str(exc)})
         return OperationResult('needs_recovery','복구 사본 유지','삭제 일부 완료','작업 복구에서 복원하세요.',errors=(str(exc),),report_id=op)
+
+
+def delete_permanently(adapter,plan,journal,delete_files=False,progress=lambda *_:None,cancelled=lambda:False):
+    """Explicit, non-recoverable deletion; never follows links or removes new files."""
+    from .files import linked
+    adapter.ensure_write_allowed();snapshot=deletion_current(adapter,plan)
+    plan=plan_delete(snapshot,plan.project.id if plan.project else None,plan.requested,plan.inferred)
+    if cancelled():raise ValueError('삭제를 취소했습니다.')
+    if delete_files and not plan.project:raise ValueError('파일 삭제는 프로젝트에서만 선택하세요.')
+    roots={f'root-{i+1:02d}':p for i,p in enumerate(plan.project.roots)} if delete_files else {}
+    if roots:
+        check_file_ownership(snapshot,plan,tuple(roots.values()))
+        errors=validate_paths(tuple(roots.values()),(),(adapter.home,journal.path.parent))
+        if errors:raise ValueError('\n'.join(errors))
+        for root in roots.values():
+            if any(linked(p) for p in (root,*root.parents) if p.exists()):raise ValueError('링크된 폴더는 삭제하지 않습니다: '+str(root))
+    inventory=scan_roots(roots,True)
+    if inventory.blockers:raise ValueError('\n'.join(inventory.blockers))
+    # Revalidate after the potentially long scan, before the first destructive RPC.
+    snapshot=deletion_current(adapter,plan)
+    if roots:check_file_ownership(snapshot,plan,tuple(roots.values()))
+    if cancelled():raise ValueError('삭제를 취소했습니다.')
+    selected={t.id for t in plan.threads}
+    resources={'thread:'+tid for tid in selected}|{t.project_id for t in plan.threads if t.project_id}|({plan.project.id} if plan.project else set())
+    if any(resources & set(p['payload'].get('resources',())) for p in journal.pending()):raise ValueError('선택한 항목의 진행·복구 작업이 있습니다.')
+    item={'project_id':plan.project.id if plan.project else '', 'name':plan.project.name if plan.project else f'대화 {len(selected)}개',
+          'sources':list(map(str,roots.values())),'destinations':[],'status':'in_progress','errors':[]}
+    report={'home':str(adapter.home),'action':'permanent-delete','label':'완전 삭제 · 되돌릴 수 없음','result_state':'running','items':[item]}
+    op=journal.report(report)
+    try:
+        for t in plan.threads:
+            if cancelled():raise ValueError('삭제가 중단됐습니다. 이미 삭제한 항목은 되돌릴 수 없습니다.')
+            if t.parent_id not in selected:adapter.delete_thread(t.id)
+        if any(t.id in selected for t in adapter.snapshot().conversations):raise ValueError('삭제한 대화가 목록에 남아 있습니다.')
+        done=0
+        for entry in inventory.entries:
+            if cancelled():raise ValueError('삭제가 중단됐습니다. 남은 파일은 유지됩니다.')
+            path=safe_child(roots[entry.root_id],entry.relative_path);stat=path.stat()
+            if (str(stat.st_dev)+':'+str(stat.st_ino)!=entry.file_id or stat.st_size!=entry.size or
+                stat.st_mtime_ns!=entry.mtime_ns or digest(path)!=entry.sha256):raise ValueError('검사 이후 파일이 변경됐습니다: '+str(path))
+            path.unlink();done+=entry.size;progress(done,inventory.logical_bytes)
+        for rid,relative in sorted(inventory.directories,key=lambda x:len(Path(x[1]).parts),reverse=True):
+            safe_child(roots[rid],relative).rmdir()
+        for root in roots.values():root.rmdir()
+        if plan.project:
+            adapter.delete_project(plan.project.id)
+            if adapter.project_exists(plan.project.id):raise ValueError('삭제한 프로젝트가 목록에 남아 있습니다.')
+        adapter.sync_desktop_state([],{tid:None for tid in selected},[plan.project.id] if plan.project else [],deleted=selected)
+        item['status']='completed';report['result_state']='completed';journal.update_report(op,report)
+        return OperationResult('completed','작업 파일 완전 삭제' if delete_files else '작업 파일 유지',
+                               '프로젝트·대화 완전 삭제 완료' if plan.project else '대화 완전 삭제 완료','복구 사본 없음 · 되돌릴 수 없습니다.',report_id=op)
+    except Exception as exc:
+        item['status']='failed';item['errors']=[str(exc)];report['result_state']='failed';journal.update_report(op,report)
+        return OperationResult('failed','남아 있는 파일 유지','완전 삭제 일부 처리 · 목록을 새로고침하세요.',
+                               '이미 삭제한 항목은 되돌릴 수 없습니다.',errors=(str(exc),),report_id=op)
 
 
 def recover_management(operation,adapter,journal):

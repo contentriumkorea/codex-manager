@@ -45,7 +45,23 @@ def property_store(hwnd):
 
 def register_window(hwnd,executable,icon,state_dir):
     executable=Path(executable).resolve();icon=Path(icon).resolve();state_dir=Path(state_dir).resolve()
-    values={2:subprocess.list2cmdline([str(executable),'-s',str(state_dir)]),3:str(icon)+',0',4:'Codex Manager',5:APP_ID}
+    command=subprocess.list2cmdline([str(executable),'-s',str(state_dir)])
+    if len(command)>=260:
+        # The window property has a MAX_PATH limit even when each path is valid.
+        # ShellExecute also accepts a shortcut, whose arguments keep the full state path.
+        shortcut=state_dir/'taskbar-relaunch.lnk';temporary=state_dir/(uuid.uuid4().hex+'.lnk')
+        literal=lambda value:"'"+str(value).replace("'","''")+"'"
+        script=(f"$ErrorActionPreference='Stop'; $s=(New-Object -ComObject WScript.Shell).CreateShortcut({literal(temporary)}); "
+                f"$s.TargetPath={literal(executable)}; $s.Arguments={literal(subprocess.list2cmdline(['-s',str(state_dir)]))}; "
+                f"$s.WorkingDirectory={literal(executable.parent)}; $s.IconLocation={literal(str(icon)+',0')}; $s.Save()")
+        try:
+            subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',script],check=True,timeout=10,
+                           capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
+            temporary.replace(shortcut)
+        except (OSError,subprocess.SubprocessError) as exc:raise OSError('Taskbar relaunch shortcut could not be created.') from exc
+        finally:temporary.unlink(missing_ok=True)
+        command=subprocess.list2cmdline([str(shortcut)])
+    values={2:command,3:str(icon)+',0',4:'Codex Manager',5:APP_ID}
     with property_store(hwnd) as store:
         setter=method(store,6,ctypes.POINTER(KEY),ctypes.POINTER(VALUE))
         # Relaunch information must precede the window AppUserModelID.
