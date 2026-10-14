@@ -114,7 +114,7 @@ class Shortcuts(QObject):
         def done(result):
             if result.state=='completed' and clip and self.cut is clip:self.cancel_cut()
             w.show_result(result)
-        w.run_job('파일 작업',lambda worker:edit_files(kind,paths,destination,roots,protected,w.journal,w.adapter.home,name=name,cancelled=worker.cancelled.is_set),done)
+        w.run_job('파일 작업',lambda worker:edit_files(kind,paths,destination,roots,protected,w.journal,w.adapter.home,name=name,cancelled=worker.cancelled.is_set,progress=worker.report),done)
     def delete(self,view):
         w=self.w
         if not self.live() or self.busy():return

@@ -7,6 +7,7 @@ from .models import FileEntry, Inventory, OperationResult, Project
 from .files import copy_verified, digest, scan_roots, safe_child, validate_paths, inside
 from .bundles import load_manifest, verify_bundle, write_json
 from .catalog import clean_path
+from .progress import phase, activity
 
 
 def require(verification):
@@ -48,6 +49,7 @@ def change_connections(adapter,project,assignments,journal):
 
 
 def transfer_project(adapter, project, destinations, journal, recovery_root, target=None, clean=False, progress=lambda *_:None, cancelled=lambda:False):
+    phase(progress,'프로젝트·대화 확인')
     adapter.ensure_write_allowed()
     snapshot=adapter.snapshot()
     source=next(p for p in snapshot.projects if p.id==project.id)
@@ -78,7 +80,7 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
     for t in conversations:
         map_path(t.cwd,mapping)
         for r in t.runtime_roots: map_path(r,mapping)
-    inventory=scan_roots(roots,True)
+    inventory=scan_roots(roots,True,progress,cancelled)
     if inventory.blockers: raise ValueError('\n'.join(inventory.blockers))
     operation_id=uuid.uuid4().hex
     recovery=Path(recovery_root)/operation_id;recovery.mkdir(parents=True)
@@ -86,15 +88,20 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
                                 'source':asdict(source),'destinations':destinations,'recovery':str(recovery)})
     moved=[];project_changed=False;linked_done=False
     try:
-        for t in conversations:
+        phase(progress,'대화 복구 사본 준비',total=len(conversations),unit='items')
+        for index,t in enumerate(conversations):
+            if cancelled(): raise InterruptedError('작업을 취소했습니다.')
+            activity(progress,'대화 저장',t.title)
             if not t.rollout or not t.rollout.exists(): raise ValueError(f'대화 원본이 없습니다: {t.title}')
             saved=recovery/f'{t.id}.jsonl';shutil.copyfile(t.rollout,saved)
             if digest(saved)!=digest(t.rollout): raise ValueError('복구 사본 검증 실패')
+            progress(index+1,len(conversations))
         write_json(recovery/'metadata.json',{'project':asdict(source),'target':asdict(target) if target else None,'conversations':[asdict(t) for t in conversations],'destinations':destinations,'inventory':[asdict(e) for e in inventory.entries],'directories':inventory.directories})
         journal.record(operation_id,'copying',{})
         require(copy_verified(inventory,roots,dest,progress,cancelled))
         journal.record(operation_id,'verified',{'inventory':[asdict(e) for e in inventory.entries]})
         if cancelled(): raise ValueError('작업을 취소했습니다. 원본을 유지했습니다.')
+        phase(progress,'프로젝트·대화 연결 갱신',total=len(conversations),unit='items')
         current=adapter.snapshot()
         if current.revision!=snapshot.revision: raise ValueError('대화 또는 프로젝트가 변경됐습니다. 원본을 유지하고 다시 계획하세요.')
         new_project=Project(target.id,target.name,target.roots,target.legacy_ids) if target else Project(source.id,source.name,tuple(dest.values()),source.legacy_ids)
@@ -103,11 +110,13 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
             new_project=Project(new_project.id,new_project.name,new_project.roots+tuple(extra),new_project.legacy_ids)
         journal.record(operation_id,'relinking',{})
         adapter.update_project(new_project);project_changed=True
-        for t in conversations:
+        for index,t in enumerate(conversations):
+            activity(progress,'대화 연결',t.title)
             journal.record(operation_id,'relinking',{'thread_id':t.id,'old_cwd':str(t.cwd),'new_cwd':str(map_path(t.cwd,mapping))})
             moved.append(t)
             adapter.relocate_conversation(t.id,map_path(t.cwd,mapping),tuple(map_path(r,mapping) for r in t.runtime_roots) or (map_path(t.cwd,mapping),))
             adapter.assign_conversation(t.id,new_project.id)
+            progress(index+1,len(conversations))
         journal.record(operation_id,'linked',{})
         linked_done=True
         removed=[]
@@ -115,13 +124,16 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
             remaining=[t for t in adapter.snapshot().conversations if t.project_id==source.id]
             if remaining: raise ValueError('원본 프로젝트에 대화가 남아 있어 정리를 중단했습니다.')
             adapter.delete_project(source.id);removed=[source.id]
+        phase(progress,'Codex 목록 반영')
         adapter.sync_desktop_state([new_project],{t.id:new_project.id for t in conversations},removed)
         if clean:
+            phase(progress,'이동한 원본 파일 정리')
             from .cleanup import remove_verified_files
             require(remove_verified_files(inventory,roots,dest))
         journal.record(operation_id,'completed',{})
         return OperationResult('completed','검증 완료','연결 변경 완료','원본 정리 완료' if clean else '원본 파일 유지','모바일 미확인',report_id=operation_id)
     except Exception as exc:
+        phase(progress,'작업 상태 정리·복구')
         rollback_errors=[]
         for t in reversed(moved) if not linked_done else []:
             try:
@@ -138,8 +150,9 @@ def transfer_project(adapter, project, destinations, journal, recovery_root, tar
 
 
 def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:None, cancelled=lambda:False, resume_id=None, target=None, skip_existing=False):
-    adapter.ensure_write_allowed();require(verify_bundle(bundle));m=load_manifest(bundle)
+    adapter.ensure_write_allowed();require(verify_bundle(bundle,progress,cancelled));m=load_manifest(bundle)
     if m['dependencies']: raise ValueError('외부 첨부·자식 대화·worktree 의존성을 해결한 뒤 가져올 수 있습니다.')
+    phase(progress,'가져올 프로젝트·대화 확인')
     snapshot=adapter.snapshot();existing={t.id:t for t in snapshot.conversations}
     previous_pid=None
     intended=set(); skipped=set()
@@ -193,6 +206,7 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
         require(copy_verified(inv,src,dest,progress,cancelled))
         journal.record(operation_id,'verified',{})
         if cancelled(): raise ValueError('가져오기를 취소했습니다. 파일 사본과 백업은 유지됩니다.')
+        phase(progress,'프로젝트 등록')
         if target:
             if next((p for p in adapter.snapshot().projects if p.id==target.id),None)!=target: raise ValueError('합칠 프로젝트가 복사 중 변경됐습니다.')
             extra=tuple(p for p in dest.values() if not any(inside(p,r.resolve()) for r in target.roots))
@@ -204,9 +218,12 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
             if not p or p.name!=m['project']['name'] or tuple(r.resolve() for r in p.roots)!=tuple(dest.values()):
                 raise ValueError('가져올 프로젝트가 이후 변경됐습니다. 현재 연결을 덮어쓰지 않습니다.')
         journal.record(operation_id,'relinking',{'project_id':pid})
+        count=0;thread_total=len(m['conversations'])-len(skipped)
+        phase(progress,'대화 가져오기·연결 검증',total=thread_total,unit='items')
         for t in m['conversations']:
             if t['id'] in skipped: continue
             if cancelled(): raise ValueError('가져오기를 취소했습니다. 이미 등록한 항목은 작업 기록에서 확인하세요.')
+            activity(progress,'대화 등록',t['title'])
             cwd,runtime=mapped[t['id']]
             if t['id'] not in existing:
                 journal.record(operation_id,'registering',{'thread_id':t['id'],'project_id':pid,'cwd':str(cwd),'runtime_roots':runtime})
@@ -226,6 +243,8 @@ def import_bundle(bundle, destinations, adapter, journal, progress=lambda *_:Non
             active=next(x for x in adapter.snapshot().conversations if x.id==t['id'])
             if active.parent_id!=t.get('parent_id') or tuple(p.resolve() for p in active.runtime_roots)!=tuple(p.resolve() for p in runtime):
                 raise ValueError('가져온 대화의 부모·작업 폴더를 확인할 수 없습니다.')
+            count+=1;progress(count,thread_total)
+        phase(progress,'Codex 목록 반영')
         adapter.sync_desktop_state([p],{t['id']:pid for t in m['conversations'] if t['id'] not in skipped})
         reports=adapter.home/'project-manager-import-reports';reports.mkdir(exist_ok=True)
         restored=adapter.snapshot()

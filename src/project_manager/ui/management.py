@@ -120,9 +120,9 @@ class ManagementActions:
         if not self.guard_change():return
         files=dialog.files.isChecked()
         if dialog.permanent.isChecked():
-            self.run_job('선택한 항목 완전 삭제',lambda w:delete_permanently(self.adapter,plan,self.journal,files,w.progress.emit,w.cancelled.is_set),self.show_result)
+            self.run_job('선택한 항목 완전 삭제',lambda w:delete_permanently(self.adapter,plan,self.journal,files,w.report,w.cancelled.is_set),self.show_result)
         else:
-            self.run_job('복구 사본 검증 후 삭제',lambda w:delete_items(self.adapter,plan,self.journal,dialog.recovery_path,files,w.progress.emit,w.cancelled.is_set),self.show_result)
+            self.run_job('복구 사본 검증 후 삭제',lambda w:delete_items(self.adapter,plan,self.journal,dialog.recovery_path,files,w.report,w.cancelled.is_set),self.show_result)
 
     def thread_context_menu(self,point):
         item=self.thread_list.itemAt(point)

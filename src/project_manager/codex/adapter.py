@@ -9,6 +9,7 @@ from ..models import Capabilities, Project
 from ..bundles import write_json
 from .rpc import CodexClient, find_cli, RpcError
 from .portability import prepare_rollout
+from .desktop_catalog import DesktopCatalogDeletion
 
 
 def version_tuple(value):
@@ -127,7 +128,25 @@ class CodexAdapter:
 
     def delete_project(self, pid): self.call('project/delete',{'projectId':pid})
 
-    def delete_thread(self, tid): self.call('thread/delete',{'threadId':tid})
+    def delete_thread(self, tid):
+        self.ensure_write_allowed()
+        before=self.snapshot(include_runtime=False)
+        selected={tid}
+        while True:
+            children={t.id for t in before.conversations if t.parent_id in selected}
+            if children<=selected:break
+            selected.update(children)
+        selected.intersection_update(t.id for t in before.conversations)
+        failure=None
+        with DesktopCatalogDeletion(self.home) as catalog:
+            try:self.call('thread/delete',{'threadId':tid})
+            except Exception as exc:failure=exc
+            remaining={t.id for t in self.snapshot(include_runtime=False).conversations}
+            catalog.remove(selected-remaining)
+        # A partially completed RPC still needs its confirmed removals reflected
+        # in the sidebar. Commit those before reporting the original failure.
+        if failure:raise failure
+        if selected & remaining:raise RuntimeError('삭제한 대화가 원본 목록에 남아 있습니다.')
 
     def sync_desktop_state(self, projects, assignments, removed=(),deleted=()):
         """Update legacy UI records only while the app is closed; keep all unrelated data."""

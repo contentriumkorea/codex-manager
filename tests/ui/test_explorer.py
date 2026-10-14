@@ -76,7 +76,7 @@ def test_backup_finishes_in_selected_backup_with_restore_available(qtbot,tmp_pat
     monkeypatch.setattr('project_manager.ui.window.QFileDialog.getExistingDirectory',lambda *args:str(backups))
     monkeypatch.setattr('project_manager.ui.window.confirm',lambda *args:True)
     monkeypatch.setattr('project_manager.ui.window.QMessageBox.information',lambda *args:None)
-    worker=SimpleNamespace(progress=SimpleNamespace(emit=lambda *args:None),cancelled=SimpleNamespace(is_set=lambda:False))
+    worker=SimpleNamespace(report=lambda *args:None,cancelled=SimpleNamespace(is_set=lambda:False))
     monkeypatch.setattr(w,'run_job',lambda title,work,done:done(work(worker)))
     w.backup()
     assert w.mode=='backups' and w.active_bundle==w.backups[-1] and w.bundle_action.isEnabled()

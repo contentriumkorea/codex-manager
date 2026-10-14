@@ -1,4 +1,4 @@
-"""Compile the full Windows installer from the same verified updater payload."""
+"""Optional developer/offline installer. Public installs use build_bootstrap.py."""
 import argparse
 import hashlib
 import json
@@ -22,12 +22,11 @@ def build_setup(compiler,dist,output,test=False):
     args=[str(compiler),'/Qp','/DAppVersion='+VERSION,'/DSourceDir='+str(dist),'/DOutputDir='+str(output)]
     if test:args+=['/DAppId=Contentrium.CodexManager.QA','/DAppTitle=Codex Manager QA']
     subprocess.run(args+[str(ROOT/'packaging/codex-manager.iss')],check=True)
-    setup=output/'Codex-Manager-Setup.exe'
+    setup=output/'Codex-Manager-Offline-Setup.exe'
     if test:
         (output/'setup-qa.json').write_text(json.dumps({'test':True,'sha256':digest(setup)}),encoding='utf-8')
     else:
-        names=('Codex-Manager-Setup.exe','Codex-Manager-Windows-x64.zip','update.json')
-        (output/'SHA256SUMS.txt').write_text(''.join(digest(output/name)+'  '+name+'\n' for name in names),encoding='utf-8')
+        (output/'OFFLINE-SHA256SUMS.txt').write_text(digest(setup)+'  '+setup.name+'\n',encoding='utf-8')
     print(json.dumps({'setup':str(setup),'size':setup.stat().st_size,'sha256':digest(setup),'test':test}))
 
 

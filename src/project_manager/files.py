@@ -5,12 +5,18 @@ import stat
 import uuid
 from pathlib import Path
 from .models import FileEntry, Inventory, Verification
+from .progress import phase, activity
 
 
-def digest(path: Path) -> str:
-    h=hashlib.sha256()
+def digest(path: Path, cancelled=lambda:False, progress=None) -> str:
+    h=hashlib.sha256();done=0
     with path.open('rb') as f:
-        for chunk in iter(lambda:f.read(1024*1024),b''): h.update(chunk)
+        total=os.fstat(f.fileno()).st_size if progress else 0
+        for chunk in iter(lambda:f.read(1024*1024),b''):
+            if cancelled(): raise InterruptedError('사용자가 작업을 취소했습니다.')
+            h.update(chunk)
+            done+=len(chunk)
+            if progress: progress(done,total)
     return h.hexdigest()
 
 
@@ -54,13 +60,16 @@ def safe_child(root: Path, relative: str) -> Path:
     return target
 
 
-def scan_roots(roots, hash_files):
+def scan_roots(roots, hash_files, progress=None, cancelled=lambda:False):
+    phase(progress,'원본 파일·용량 검사')
     entries=[];directories=[];errors=list(validate_paths(tuple(roots.values()),(),()))
-    seen=set();logical=0
+    seen=set();logical=0;processed=0
     for rid,root in roots.items():
         if not root.is_dir(): errors.append(f'폴더를 찾을 수 없습니다: {root}');continue
         try:
             for folder, dirs, files in os.walk(root,followlinks=False,onerror=lambda exc:errors.append(str(exc))):
+                if cancelled(): raise InterruptedError('사용자가 작업을 취소했습니다.')
+                activity(progress,'폴더 확인',folder)
                 for name in list(dirs):
                     p=Path(folder)/name
                     if linked(p): errors.append(f'링크 폴더: {p}');dirs.remove(name)
@@ -70,12 +79,16 @@ def scan_roots(roots, hash_files):
                     try:
                         if linked(p): raise ValueError(f'링크 또는 클라우드 자리표시자: {p}')
                         before=p.stat();file_id=f'{before.st_dev}:{before.st_ino}'
-                        sha=digest(p) if hash_files else None
+                        activity(progress,'파일 검사',p)
+                        sha=digest(p,cancelled,(lambda done,_:progress(processed+done,None)) if progress else None) if hash_files else None
+                        if hash_files: processed+=before.st_size
                         after=p.stat()
                         if (before.st_mtime_ns,before.st_size)!=(after.st_mtime_ns,after.st_size): raise ValueError(f'검사 중 파일 변경: {p}')
                         entries.append(FileEntry(rid,p.relative_to(root).as_posix(),before.st_size,sha,file_id,before.st_mtime_ns))
                         if file_id not in seen: logical+=before.st_size;seen.add(file_id)
+                    except InterruptedError: raise
                     except (OSError,ValueError) as exc: errors.append(str(exc))
+        except InterruptedError: raise
         except (OSError,ValueError) as exc: errors.append(str(exc))
     return Inventory(tuple(entries),tuple(errors),logical,None,tuple(directories))
 
@@ -85,6 +98,7 @@ def copy_verified(inventory,sources,destinations,progress,cancelled):
     problems=validate_paths(tuple(sources.values()),tuple(destinations.values()),())
     if problems: return Verification(False,problems)
     total=sum(e.size for e in inventory.entries);done=0
+    phase(progress,'파일 복사',total=total)
     try:
         for rid,destination in destinations.items(): destination.mkdir(parents=True,exist_ok=True)
         for rid,relative in inventory.directories: safe_child(destinations[rid],relative).mkdir(parents=True,exist_ok=True)
@@ -92,23 +106,28 @@ def copy_verified(inventory,sources,destinations,progress,cancelled):
             if cancelled(): raise ValueError('사용자가 작업을 취소했습니다.')
             source=safe_child(sources[e.root_id],e.relative_path)
             target=safe_child(destinations[e.root_id],e.relative_path)
+            activity(progress,'원본 확인',source,transfer=False)
             s=source.stat()
-            if s.st_size!=e.size or s.st_mtime_ns!=e.mtime_ns or (e.sha256 and digest(source)!=e.sha256): raise ValueError(f'원본이 변경됐습니다: {source}')
+            if s.st_size!=e.size or s.st_mtime_ns!=e.mtime_ns or (e.sha256 and digest(source,cancelled)!=e.sha256): raise ValueError(f'원본이 변경됐습니다: {source}')
             target.parent.mkdir(parents=True,exist_ok=True)
             if target.exists():
-                if e.sha256 and digest(target)==e.sha256: done+=e.size;progress(done,total);continue
+                activity(progress,'기존 복사본 검증',target,transfer=False)
+                if e.sha256 and digest(target,cancelled)==e.sha256: done+=e.size;progress(done,total);continue
                 raise FileExistsError(f'파일 충돌: {target}')
             if shutil.disk_usage(target.parent).free < e.size+1024*1024: raise OSError('대상 디스크 공간이 부족합니다.')
             temporary=target.with_name(target.name+'.'+uuid.uuid4().hex+'.partial')
             try:
+                activity(progress,'복사 중',source,transfer=True)
                 h=hashlib.sha256()
                 with source.open('rb') as src,temporary.open('xb') as dst:
                     for chunk in iter(lambda:src.read(1024*1024),b''):
                         if cancelled(): raise ValueError('사용자가 작업을 취소했습니다.')
                         dst.write(chunk);h.update(chunk);done+=len(chunk);progress(done,total)
+                    activity(progress,'디스크 기록 중',target,transfer=False)
                     dst.flush();os.fsync(dst.fileno())
                 if e.sha256 and h.hexdigest()!=e.sha256: raise ValueError('복사 중 원본 내용이 변경됐습니다.')
-                if digest(temporary)!=h.hexdigest(): raise ValueError('복사본 검증에 실패했습니다.')
+                activity(progress,'복사본 검증',target,transfer=False)
+                if digest(temporary,cancelled)!=h.hexdigest(): raise ValueError('복사본 검증에 실패했습니다.')
                 shutil.copystat(source,temporary)
                 # Windows rename refuses to overwrite. On other platforms use link+unlink.
                 if os.name=='nt': temporary.rename(target)

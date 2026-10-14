@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from .files import linked,digest
 from .models import OperationResult
+from .progress import phase, activity, item
 
 RECOVERY='.codex-manager-file-recovery'
 
@@ -16,16 +17,20 @@ def checked(path):
     return path
 
 
-def signature(path):
+def signature(path, progress=None, cancelled=lambda:False):
     path=checked(path)
     if not path.exists():raise ValueError('파일을 찾을 수 없습니다: '+str(path))
-    if path.is_file():return {'':digest(path)}
+    if path.is_file():
+        activity(progress,'파일 확인',path,transfer=False)
+        return {'':digest(path,cancelled)}
     if not path.is_dir():raise ValueError('일반 파일 또는 폴더만 처리할 수 있습니다.')
     result={'':None}
     for folder,dirs,files in os.walk(path,followlinks=False,onerror=lambda exc:(_ for _ in ()).throw(exc)):
+        if cancelled():raise InterruptedError('파일 작업을 취소했습니다.')
         for name in dirs+files:
             item=checked(Path(folder)/name)
-            result[item.relative_to(path).as_posix()]=None if item.is_dir() else digest(item)
+            activity(progress,'파일 확인',item,transfer=False)
+            result[item.relative_to(path).as_posix()]=None if item.is_dir() else digest(item,cancelled)
     return result
 
 
@@ -36,20 +41,26 @@ def unused(path,reserved):
     reserved.add(str(candidate).casefold());return candidate
 
 
-def copy_item(source,target,stamp,cancelled=lambda:False):
+def copy_item(source,target,stamp,cancelled=lambda:False,progress=lambda *_:None):
     if target.exists():raise FileExistsError('대상에 새 항목이 생겼습니다: '+str(target))
+    total=sum(checked(source/relative if relative else source).stat().st_size for relative,value in stamp.items() if value is not None)
+    done=0
+    phase(progress,'파일 복사',total=total,transfer=True)
     for relative,value in sorted(stamp.items(),key=lambda pair:(pair[0].count('/'),pair[0])):
         src=checked(source/relative if relative else source);dst=checked(target/relative if relative else target)
         if value is None:dst.mkdir()
         else:
+            activity(progress,'복사 중',src,transfer=True)
             with src.open('rb') as inp,dst.open('xb') as out:
                 while True:
                     if cancelled():raise InterruptedError('파일 작업을 취소했습니다. 원본은 유지됩니다.')
                     chunk=inp.read(1024*1024)
                     if not chunk:break
-                    out.write(chunk)
+                    out.write(chunk);done+=len(chunk);progress(done,total)
+                activity(progress,'디스크 기록 중',dst,transfer=False)
             shutil.copystat(src,dst)
-    if signature(source)!=stamp or signature(target)!=stamp:raise ValueError('복사 중 파일이 바뀌었습니다. 원본은 유지됩니다.')
+    phase(progress,'원본·복사본 검증')
+    if signature(source,progress,cancelled)!=stamp or signature(target,progress,cancelled)!=stamp:raise ValueError('복사 중 파일이 바뀌었습니다. 원본은 유지됩니다.')
 
 
 def identity(path):
@@ -59,7 +70,7 @@ def identity(path):
 def same_device(source,destination):return source.stat().st_dev==destination.stat().st_dev
 
 
-def edit_files(kind,sources,destination,roots,protected,journal,home,name=None,cancelled=lambda:False):
+def edit_files(kind,sources,destination,roots,protected,journal,home,name=None,cancelled=lambda:False,progress=lambda *_:None):
     if cancelled():raise InterruptedError('파일 작업을 취소했습니다.')
     if kind not in ('copy','move','delete','rename'):raise ValueError('지원하지 않는 파일 작업입니다.')
     roots=tuple(checked(p) for p in roots);protected=tuple(checked(p) for p in protected)
@@ -79,9 +90,10 @@ def edit_files(kind,sources,destination,roots,protected,journal,home,name=None,c
             raise ValueError('사용할 수 없는 파일 이름입니다.')
         if sources[0].name==name:return OperationResult('completed','변경 없음','대화 유지','파일 유지')
     op=uuid.uuid4().hex;plans=[];reserved=set()
+    phase(progress,'원본 파일·용량 검사')
     for i,source in enumerate(sources):
         if cancelled():raise InterruptedError('파일 작업을 취소했습니다.')
-        stamp=signature(source);hold=None
+        stamp=signature(source,progress,cancelled);hold=None
         root=next((r for r in roots if source.is_relative_to(r)),None)
         if kind=='delete':target=root/RECOVERY/op/(str(i)+'-'+source.name);mode='rename'
         elif kind=='rename':target=source.with_name(name);mode='rename'
@@ -102,20 +114,25 @@ def edit_files(kind,sources,destination,roots,protected,journal,home,name=None,c
         for index,plan in enumerate(plans):
             if cancelled():raise InterruptedError('파일 작업을 취소했습니다.')
             source=checked(plan['source']);target=checked(plan['target']);stamp=plan['signature'];stage=checked(plan['stage'])
-            if signature(source)!=stamp or identity(source)!=plan['source_id']:raise ValueError('원본이 변경됐습니다: '+str(source))
+            item(progress,index+1,len(plans),source.name)
+            phase(progress,'원본 파일 확인')
+            if signature(source,progress,cancelled)!=stamp or identity(source)!=plan['source_id']:raise ValueError('원본이 변경됐습니다: '+str(source))
             if target.exists():raise FileExistsError('대상에 새 항목이 생겼습니다: '+str(target))
             target.parent.mkdir(parents=True,exist_ok=True)
             if plan['mode']=='rename':
+                phase(progress,labels[kind])
+                activity(progress,'경로 변경',source)
                 journal.record(op,'publish-intent',{'index':index,'identity':identity(source)})
                 source.rename(target)
             else:
                 stage.parent.mkdir(parents=True,exist_ok=True)
-                copy_item(source,stage,stamp,cancelled)
+                copy_item(source,stage,stamp,cancelled,progress)
+                phase(progress,'파일 정리')
                 journal.record(op,'publish-intent',{'index':index,'identity':identity(stage)})
                 if target.exists():raise FileExistsError('대상에 새 항목이 생겼습니다: '+str(target))
                 stage.rename(target)
                 if plan['hold']:
-                    if signature(source)!=stamp or identity(source)!=plan['source_id']:raise ValueError('이동 전에 원본이 바뀌었습니다. 원본은 유지됩니다.')
+                    if signature(source,progress,cancelled)!=stamp or identity(source)!=plan['source_id']:raise ValueError('이동 전에 원본이 바뀌었습니다. 원본은 유지됩니다.')
                     hold=checked(plan['hold']);hold.parent.mkdir(parents=True,exist_ok=True);source.rename(hold)
             journal.record(op,'editing',{'source':str(source)})
         journal.record(op,'completed',{})

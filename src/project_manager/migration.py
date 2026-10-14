@@ -78,6 +78,7 @@ def plan_import(bundles,snapshot,parent,target_id=None):
 
 def run_imports(plans,adapter,journal,skip_existing,progress=lambda *_:None,cancelled=lambda:False):
     from .operations import import_bundle
+    from .progress import item as progress_item
     items=[{'project_id':p.bundle.manifest['project']['id'],'name':p.bundle.manifest['project']['name'],
             'sources':[str(p.bundle.path)],'destinations':list(map(str,p.destinations.values())),
             'status':'not_started','errors':[]} for p in plans]
@@ -86,6 +87,7 @@ def run_imports(plans,adapter,journal,skip_existing,progress=lambda *_:None,canc
     expected_targets={p.target_id:p.target for p in plans if p.target_id}
     for index,plan in enumerate(plans):
         if cancelled(): stopped=True; break
+        progress_item(progress,index+1,len(plans),plan.bundle.manifest['project']['name'])
         item=items[index];item['status']='in_progress';journal.update_report(report_id,report)
         try:
             if any(path.exists() for path in plan.destinations.values()):raise ValueError('예정한 저장 폴더가 이미 있습니다. 가져오기 화면에서 새 위치를 확인하세요.')

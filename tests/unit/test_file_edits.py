@@ -48,7 +48,7 @@ def test_delete_restoration_never_overwrites_new_original(tmp_path):
 def test_partial_copy_recovery_releases_lock_and_keeps_source(tmp_path,monkeypatch):
     import project_manager.file_edits as edits
     root,source,dest,j=env(tmp_path)
-    def fail(src,target,stamp,cancelled=lambda:False):target.write_text('partial');raise OSError('disk full')
+    def fail(src,target,stamp,cancelled=lambda:False,progress=lambda *_:None):target.write_text('partial');raise OSError('disk full')
     monkeypatch.setattr(edits,'copy_item',fail)
     assert edit_files('copy',[source],dest,[root],[],j,tmp_path/'home').state=='needs_recovery'
     assert undo_files(j.pending()[0],j).state=='completed'
@@ -58,7 +58,7 @@ def test_partial_copy_recovery_releases_lock_and_keeps_source(tmp_path,monkeypat
 def test_racing_identical_target_is_never_deleted(tmp_path,monkeypatch):
     import project_manager.file_edits as edits
     root,source,dest,j=env(tmp_path);original=edits.copy_item
-    def race(src,stage,stamp,cancelled=lambda:False):
+    def race(src,stage,stamp,cancelled=lambda:False,progress=lambda *_:None):
         (dest/source.name).write_text('original');return original(src,stage,stamp)
     monkeypatch.setattr(edits,'copy_item',race)
     assert edit_files('copy',[source],dest,[root],[],j,tmp_path/'home').state=='needs_recovery'

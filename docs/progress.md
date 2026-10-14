@@ -126,3 +126,12 @@ Live test folders verified. Do not mutate them until independent fixture tests p
 - Central live-mode action guard preserves read-only backup browsing; selections remain stable through refresh and section changes.
 - Full suite: 165 passed; final compact layout UI suite: 44 passed. Independent review findings fixed; native screenshots checked at normal/minimum size.
 - Real user conversations were not mutated for testing. Mobile sync and a second physical PC remain outside verification.
+
+2026-10-13 Codex Manager v0.10.2 transfer progress:
+- Show current phase/file, batch position, transferred bytes, recent transfer speed, total elapsed time and copying-stage ETA in one light progress dialog. Unknown-duration phases stay indeterminate.
+- Report source scanning, chat backup, checksum generation and full backup verification, including chunk-level hash counts after file copy reaches 100%.
+- Poll the latest immutable worker snapshot every 250ms so throttled transitions remain visible during blocked I/O; cancellation keeps the dialog visible until work finishes. Rate estimates stay bounded to the recent five-second observation window after stalls.
+- Full suite: 248 passed, 2 skipped; native Windows suite: 6 passed (2 platform tests plus 4 progress-window tests). Independent read-only review's two findings were reproduced, fixed and re-reviewed with no remaining important findings.
+- Native source dialogs inspected for copying, verification, cancellation and long paths. Packaged update v0.10.2 passed startup, taskbar, settings and uninstaller retention; ready in 3.797s, total 14.187s in the isolated run.
+- User PC installed through the production Setup: payload hashes match, Start menu/uninstall/taskbar registered, settings retained and journal unchanged. Installer SHA256: 402188fc1dc6cd9b634b15f3aa5b1a65f0d5d0f0217740b05d81028b9f14b2f4.
+- GitHub publishing blocked by HTTP 401 authentication failure. Existing backup activity on another physical PC was not directly observed; its running older process does not receive this UI change until updated.

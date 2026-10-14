@@ -38,7 +38,7 @@
 ### 4. Installation and release
 - [x] Add Inno Setup installer and build helper. Test install/uninstall in a dedicated location with isolated data and verify shortcuts/uninstaller.
 - [x] Fresh reviewer, full suite, fixture acceptance and packaging/update verification.
-- [ ] Publish v0.10.0 with Setup.exe, updater ZIP, metadata and checksums. Verify downloaded artifacts, native update button, then install on this computer and verify running version/settings/Start menu.
+- [x] Publish v0.10.0 with Setup.exe, updater ZIP, metadata and checksums. Verify downloaded artifacts, native update button, then install on this computer and verify running version/settings/Start menu.
 
 ## Review focus
 
@@ -60,3 +60,7 @@ Interrupted multi-import, duplicate conversation IDs, unrelated files in the cho
 - Installer QA caught an existing taskbar defect: a 263-character relaunch command returned 0x8007007a and cleared the window identity. A 278-character native regression reproduced it. A ShellExecute-compatible shortcut now preserves the executable, working directory and exact state argument. Both native Windows tests pass; release binaries are rebuilt after this fix.
 - Microsoft relaunch target reference: https://learn.microsoft.com/en-us/windows/win32/properties/props-system-appusermodel-relaunchcommand . The fix does not require 8.3 names, which are unavailable on the QA volume.
 - Rebuilt final payload: full suite 228 passed, 2 native-only skipped (186.17s); native suite 2 passed (0.99s). Isolated setup, Start menu, native startup, in-app update, uninstall, retained settings and retained user files all passed in setup-verification-0.10.0-native.
+- Release source 6992a2b and v0.10.0 were pushed; main fast-forwarded. The public release is canonical, non-draft, non-prerelease and initially downloaded successfully without authentication. Setup SHA-256: 15c62feb6cf32be654ab95588997fd4f6e5d942b1042335407269a22ae09da54. ZIP SHA-256: b54a2b827ce3035f285f113cd9f7f707e5fc289a733b345826aa7d4b4aebf7ed.
+- Public native updater: one click returned in 15ms, old process exited in 0.848s, new 0.10.0 became healthy in 11.055s. Old version detects an update; current version reports latest.
+- User installation was updated at the existing D-drive dist/CodexManager path, then the public setup registered Start menu and Windows uninstall there. All installed payload hashes, settings retention, taskbar registration and responsive running process were verified. User project/chat records were not used for destructive tests.
+- External availability changed after the successful public checks: the account page, repository and setup download now return 404; GitHub CLI reports an invalid token, and the GitHub connector requires reauthentication. Account rename or status is not established. The complete setup remains available locally and installed application is healthy. Public availability needs account access restored; no new account or alternate publishing destination was created.

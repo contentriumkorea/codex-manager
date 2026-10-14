@@ -2,9 +2,11 @@
 from ..grouping import display_membership
 from ..settings import read_settings
 from ..operations import change_connections,transfer_project
+from ..progress import phase
 
 
 def transfer_with_connections(adapter,project,destinations,journal,recovery,target,clean,inferred,progress,cancelled):
+    phase(progress,'프로젝트·대화 연결 확인')
     if cancelled():raise InterruptedError('작업을 취소했습니다.')
     if inferred:
         snapshot=adapter.snapshot();current=next((p for p in snapshot.projects if p.id==project.id),None)

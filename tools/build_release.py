@@ -20,7 +20,9 @@ def build(dist,output):
         if z.testzip(): raise ValueError('압축파일 CRC 검증 실패')
     metadata={'version':VERSION,'asset':ASSET_NAME,'size':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
     write_json(output/'update.json',metadata)
-    checksums=''.join(hashlib.sha256((output/name).read_bytes()).hexdigest()+'  '+name+'\n' for name in (ASSET_NAME,'update.json'))
+    expanded_size=sum(p.stat().st_size for p in [*paths,dist/'install-manifest.json'])
+    (output/'install.ini').write_text('[release]\nprotocol=1\n'+''.join(f'{key}={metadata[key]}\n' for key in ('version','size','sha256'))+f'expanded_size={expanded_size}\n',encoding='ascii')
+    checksums=''.join(hashlib.sha256((output/name).read_bytes()).hexdigest()+'  '+name+'\n' for name in (ASSET_NAME,'update.json','install.ini'))
     (output/'SHA256SUMS.txt').write_text(checksums,encoding='utf-8')
     print(json.dumps(metadata));return archive
 

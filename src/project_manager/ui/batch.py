@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from ..models import OperationResult
 from .flows import transfer_with_connections
+from ..progress import item as progress_item
 
 
 def plan_projects(projects,parent):
@@ -30,6 +31,7 @@ def run_projects(adapter,plans,target,clean,journal,inferred,progress,cancelled,
     report['retry_of']=retry_of;report_id=journal.report(report)
     for index,(project,mapping) in enumerate(plans):
         if cancelled():stopped=True;break
+        progress_item(progress,index+1,len(plans),project.name)
         item=items[index]
         item['status']='in_progress';journal.update_report(report_id,report)
         try:
@@ -63,8 +65,9 @@ def run_backups(adapter,plans,journal,export,progress,cancelled,retry_of=None):
     errors=[];stopped=False
     report={'home':str(adapter.home),'action':'backup','label':'프로젝트 백업','result_state':'running','items':items}
     report['retry_of']=retry_of;report_id=journal.report(report)
-    for item,(project,destination) in zip(items,plans):
+    for index,(item,(project,destination)) in enumerate(zip(items,plans)):
         if cancelled():stopped=True;break
+        progress_item(progress,index+1,len(plans),project.name)
         item['status']='in_progress';journal.update_report(report_id,report)
         try:
             snapshot=adapter.snapshot()

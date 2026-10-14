@@ -108,7 +108,7 @@ def test_backup_partial_failure_registers_only_verified_items(qtbot, tmp_path, m
         calls.append(destination)
         return Verification(len(calls) == 1, () if len(calls) == 1 else ('disk unavailable',))
     monkeypatch.setattr('project_manager.ui.window.export_project', export)
-    worker = SimpleNamespace(progress=SimpleNamespace(emit=lambda *args: None), cancelled=SimpleNamespace(is_set=lambda: False))
+    worker = SimpleNamespace(report=lambda *args: None, cancelled=SimpleNamespace(is_set=lambda: False))
     monkeypatch.setattr(w, 'run_job', lambda title, work, done: done(work(worker)))
     w.backup()
     assert w.backups == [calls[0]]

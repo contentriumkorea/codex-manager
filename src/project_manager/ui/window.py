@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt,QThread,Signal,QUrl,QTimer
 from PySide6.QtGui import QDesktopServices,QIcon
 from PySide6.QtWidgets import (QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QLabel,QPushButton,
-    QLineEdit,QListWidget,QListWidgetItem,QSplitter,QFileDialog,QMessageBox,QProgressDialog,
+    QLineEdit,QListWidget,QListWidgetItem,QSplitter,QFileDialog,QMessageBox,
     QDialog,QPlainTextEdit,QInputDialog,QAbstractItemView,QFrame,QComboBox,QMenu,QApplication,QStyle)
 from ..models import Snapshot
 from ..catalog import clean_path
@@ -25,6 +25,8 @@ from ..stores import Store,store_info,discover_stores,default_search_roots
 from ..version import APP_NAME,VERSION
 from ..settings import read_settings,save_settings
 from .management import ManagementActions
+from ..progress import ProgressReporter
+from .progress import JobProgressDialog
 
 
 def bytes_text(size):
@@ -35,11 +37,13 @@ def bytes_text(size):
 
 
 class Worker(QThread):
-    result=Signal(object);error=Signal(str);progress=Signal(object,object)
+    result=Signal(object);error=Signal(str);progress=Signal(object,object);status=Signal(object)
     def __init__(self,func):
         super().__init__();self.func=func;self.cancelled=threading.Event()
+        self.report=ProgressReporter(self.status.emit)
     def run(self):
-        try: self.result.emit(self.func(self))
+        try:
+            value=self.func(self);self.report.flush();self.result.emit(value)
         except Exception as exc: self.error.emit(str(exc))
 
 
@@ -333,21 +337,25 @@ class MainWindow(ManagementActions,QMainWindow):
             self.footer.setText('업데이트 설치가 진행 중입니다. 완료 후 작업할 수 있습니다.');return
         if self.workers: return
         self.size_scanner.stop()
-        dialog=QProgressDialog(title,'취소',0,0,self);dialog.setWindowTitle('작업 중');dialog.setWindowModality(Qt.WindowModal);dialog.setMinimumDuration(0);dialog.setAutoClose(False);dialog.setAutoReset(False)
-        worker=Worker(func);self.workers.append(worker);dialog.canceled.connect(worker.cancelled.set)
+        dialog=JobProgressDialog(title,self)
+        worker=Worker(func);self.workers.append(worker);dialog.cancel_requested.connect(worker.cancelled.set)
         self.selection_bar.sync()
-        def progress(current,total):
-            if total: dialog.setRange(0,1000);dialog.setValue(int(current/total*1000));dialog.setLabelText(f'{title}\n{bytes_text(current)} / {bytes_text(total)}')
-        worker.progress.connect(progress)
+        # Always read the newest snapshot: a throttled transition may precede a
+        # long hash/fsync, and older queued events must not restore stale 100%.
+        refresh_progress=lambda:dialog.update_progress(worker.report.state)
+        worker.status.connect(lambda _:refresh_progress())
+        dialog.timer.timeout.connect(refresh_progress)
+        worker.progress.connect(worker.report)
         def success(result):
-            dialog.close()
+            dialog.complete()
             if done: done(result)
-        worker.result.connect(success);worker.error.connect(lambda e:(dialog.close(),QMessageBox.warning(self,'작업 확인',e)))
+        worker.result.connect(success);worker.error.connect(lambda e:(dialog.complete(),QMessageBox.warning(self,'작업 확인',e)))
         def finish():
+            dialog.complete();dialog.deleteLater()
             self.workers.remove(worker);worker.deleteLater();self.sync_size_scan()
             self.selection_bar.sync()
             if self.activity_dialog:self.activity_dialog.refresh()
-        worker.finished.connect(finish);worker.start()
+        worker.finished.connect(finish);dialog.show();worker.start()
 
     def show_result(self,result):
         if self.updater.requested:
@@ -568,7 +576,7 @@ class MainWindow(ManagementActions,QMainWindow):
                 self.footer.setText(result.file_status)
         from .batch import run_backups
         adapter=self.adapter
-        self.run_job('대화와 파일 백업',lambda worker:run_backups(adapter,plans,self.journal,export_project,worker.progress.emit,worker.cancelled.is_set,retry_of),done)
+        self.run_job('대화와 파일 백업',lambda worker:run_backups(adapter,plans,self.journal,export_project,worker.report,worker.cancelled.is_set,retry_of),done)
 
     def guard_change(self):
         try: self.adapter.ensure_write_allowed();return True
@@ -606,7 +614,7 @@ class MainWindow(ManagementActions,QMainWindow):
         clean=confirm_transfer(self,title,text)
         if clean is None or not self.guard_change():return
         adapter=self.adapter
-        self.run_job(title,lambda worker:run_projects(adapter,plans,target,clean,self.journal,inferred,worker.progress.emit,worker.cancelled.is_set,retry_of),done or self.show_result)
+        self.run_job(title,lambda worker:run_projects(adapter,plans,target,clean,self.journal,inferred,worker.report,worker.cancelled.is_set,retry_of),done or self.show_result)
 
     def start_transfer(self,p,destinations,target=None,done=None):
         text=p.name+(' → '+target.name if target else '')+'\n\n'
@@ -618,7 +626,7 @@ class MainWindow(ManagementActions,QMainWindow):
         if clean is None: return
         recovery=(target.roots[0].parent if target else next(iter(destinations.values())).parent)/'.project-manager-recovery'
         from .flows import transfer_with_connections
-        self.run_job('프로젝트를 옮기는 중' if not target else '프로젝트를 합치는 중',lambda w:transfer_with_connections(self.adapter,p,destinations,self.journal,recovery,target,clean,inferred,w.progress.emit,w.cancelled.is_set),done or self.show_result)
+        self.run_job('프로젝트를 옮기는 중' if not target else '프로젝트를 합치는 중',lambda w:transfer_with_connections(self.adapter,p,destinations,self.journal,recovery,target,clean,inferred,w.report,w.cancelled.is_set),done or self.show_result)
 
     def connections(self):
         p=self.selected_project()
@@ -677,7 +685,7 @@ class MainWindow(ManagementActions,QMainWindow):
                 QMessageBox.information(self,'가져오기 완료',result.file_status+'\n\nCodex 앱을 다시 열면 가져온 프로젝트와 대화를 확인할 수 있습니다.\n외장하드의 백업은 그대로 보관됩니다.')
                 self.footer.setText(result.file_status);QTimer.singleShot(50,self.reload)
             else:self.show_result(result)
-        self.run_job('파일과 대화 가져오기',lambda worker:run_imports(plans,self.adapter,self.journal,skip,worker.progress.emit,worker.cancelled.is_set),done)
+        self.run_job('파일과 대화 가져오기',lambda worker:run_imports(plans,self.adapter,self.journal,skip,worker.report,worker.cancelled.is_set),done)
 
     def show_recovery(self,operation_id=None):
         if self.shortcuts.busy():return
@@ -704,7 +712,7 @@ class MainWindow(ManagementActions,QMainWindow):
             selected=QFileDialog.getExistingDirectory(self,'중단된 작업의 백업 폴더 선택',data['payload'].get('bundle',''))
             if not selected: return
             bundle_override=Path(selected)
-        self.run_job('프로젝트 복구',lambda w:recover_operation(operation_id,self.adapter,self.journal,w.progress.emit,bundle_override),self.show_result)
+        self.run_job('프로젝트 복구',lambda w:recover_operation(operation_id,self.adapter,self.journal,w.report,bundle_override),self.show_result)
 
     def verify_restore(self):
         bundle=self.active_bundle

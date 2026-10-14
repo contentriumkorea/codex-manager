@@ -8,6 +8,7 @@ from pathlib import Path
 from .files import copy_verified, digest, safe_child, scan_roots, validate_paths, linked
 from .models import Verification
 from .codex.portability import transcript
+from .progress import phase, activity
 
 
 def write_json(path, value):
@@ -59,7 +60,7 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
         children=[t for t in snapshot.conversations if t.parent_id in affected and t.id not in affected]
         if not children: break
         affected.update(t.id for t in children);conversations.extend(children)
-    inventory=scan_roots(roots,True)
+    inventory=scan_roots(roots,True,progress,cancelled)
     if inventory.blockers: raise ValueError('\n'.join(inventory.blockers))
     destination.mkdir(parents=True)
     manifest={'format_version':1,'bundle_id':str(uuid.uuid4()),'state':'partial',
@@ -72,6 +73,8 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
     check=copy_verified(inventory,roots,{rid:destination/'files'/rid for rid in roots},progress,cancelled)
     if not check.ok: raise ValueError('\n'.join(check.errors))
     (destination/'conversations').mkdir()
+    chat_total=sum(t.rollout.stat().st_size for t in conversations if t.rollout and t.rollout.is_file());chat_done=0
+    phase(progress,'대화 기록 백업',total=chat_total,transfer=True)
     for t in conversations:
         if cancelled(): raise ValueError('백업을 취소했습니다.')
         if not t.rollout or not t.rollout.is_file(): raise ValueError(f'대화 기록이 없습니다: {t.title}')
@@ -79,9 +82,14 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
         target=destination/'conversations'/f'{t.id}.jsonl'
         # A source chat can still append while the desktop is open. Detect changes.
         before=t.rollout.stat()
-        shutil.copyfile(t.rollout,target)
+        activity(progress,'대화 저장',t.title,transfer=True)
+        with t.rollout.open('rb') as src,target.open('xb') as dst:
+            for chunk in iter(lambda:src.read(1024*1024),b''):
+                if cancelled(): raise InterruptedError('백업을 취소했습니다.')
+                dst.write(chunk);chat_done+=len(chunk);progress(chat_done,chat_total)
+            activity(progress,'대화 기록 검증',t.title,transfer=False)
         after=t.rollout.stat()
-        if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns) or digest(t.rollout)!=digest(target):
+        if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns) or digest(t.rollout,cancelled)!=digest(target,cancelled):
             raise ValueError(f'백업 중 대화가 바뀌었습니다: {t.title}')
         record=asdict(t);record['rollout']=target.relative_to(destination).as_posix()
         manifest['conversations'].append(record)
@@ -91,49 +99,75 @@ def export_project(project, snapshot, destination, progress=lambda *_:None, canc
         if any(not any(path.resolve().is_relative_to(root.resolve()) for root in project.roots) for path in (t.cwd,*t.runtime_roots)):
             manifest['dependencies'].append({'kind':'external_workspace','thread_id':t.id,'resolved':False})
         # Only explicit image/attachment file references; command text is history.
-        for line in target.open(encoding='utf-8'):
-            item=json.loads(line)
-            if item.get('type')!='response_item': continue
-            for part in item.get('payload',{}).get('content',[]) or []:
-                if not isinstance(part,dict): continue
-                raw=part.get('path') or part.get('image_path')
-                if isinstance(raw,str) and Path(raw).is_absolute():
-                    outside=not any(Path(raw).resolve().is_relative_to(p.resolve()) for p in roots.values())
-                    if outside: manifest['dependencies'].append({'kind':'external_attachment','path':raw,'resolved':False})
+        with target.open(encoding='utf-8') as record_file:
+            for line in record_file:
+                if cancelled(): raise InterruptedError('백업을 취소했습니다.')
+                item=json.loads(line)
+                if item.get('type')!='response_item': continue
+                for part in item.get('payload',{}).get('content',[]) or []:
+                    if not isinstance(part,dict): continue
+                    raw=part.get('path') or part.get('image_path')
+                    if isinstance(raw,str) and Path(raw).is_absolute():
+                        outside=not any(Path(raw).resolve().is_relative_to(p.resolve()) for p in roots.values())
+                        if outside: manifest['dependencies'].append({'kind':'external_attachment','path':raw,'resolved':False})
     for root in project.roots:
         git=root/'.git'
         if git.is_file(): manifest['dependencies'].append({'kind':'linked_worktree','path':str(root),'resolved':False})
     manifest['state']='complete'
     write_json(destination/'manifest.json',manifest)
-    checksum=[]
+    phase(progress,'백업 검증 목록 준비')
+    checksum=[];paths=[]
     for folder,_,names in os.walk(destination):
+        if cancelled(): raise InterruptedError('백업을 취소했습니다.')
+        activity(progress,'폴더 확인',folder)
         for name in names:
             p=Path(folder)/name
             if p.parent==destination and p.name in ('checksums.jsonl','verification.json'): continue
-            checksum.append({'path':p.relative_to(destination).as_posix(),'size':p.stat().st_size,'sha256':digest(p)})
+            paths.append((p,p.stat().st_size))
+    total=sum(size for _,size in paths);done=0
+    phase(progress,'백업 검증 목록 생성',total=total)
+    for p,size in paths:
+        activity(progress,'파일 검증',p)
+        sha=digest(p,cancelled,lambda read,_:progress(done+read,total))
+        checksum.append({'path':p.relative_to(destination).as_posix(),'size':size,'sha256':sha})
+        done+=size;progress(done,total)
     with (destination/'checksums.jsonl').open('x',encoding='utf-8') as f:
         for entry in checksum: f.write(json.dumps(entry,ensure_ascii=False)+'\n')
         f.flush();os.fsync(f.fileno())
-    verification=verify_bundle(destination)
+    verification=verify_bundle(destination,progress,cancelled)
     write_json(destination/'verification.json',{'integrity':verification.ok,'restore_verified':False,'errors':verification.errors})
     if not verification.ok: raise ValueError('\n'.join(verification.errors))
     return verification
 
 
-def verify_bundle(bundle: Path):
+def verify_bundle(bundle: Path, progress=lambda *_:None, cancelled=lambda:False):
+    phase(progress,'백업 검증 준비')
     try:
         if linked(bundle): raise ValueError('링크된 백업 폴더는 사용할 수 없습니다.')
         m=load_manifest(bundle)
         expected={}
-        for line in (bundle/'checksums.jsonl').open(encoding='utf-8'):
-            entry=json.loads(line);path=safe_child(bundle,entry['path'])
-            if entry['path'] in expected: raise ValueError('백업 파일 목록에 중복 경로가 있습니다.')
-            expected[entry['path']]=entry
-            if not path.is_file() or path.stat().st_size!=entry['size'] or digest(path)!=entry['sha256']:
+        with (bundle/'checksums.jsonl').open(encoding='utf-8') as checksums:
+            for line in checksums:
+                if cancelled(): raise InterruptedError('백업 검증을 취소했습니다.')
+                entry=json.loads(line);safe_child(bundle,entry['path'])
+                if entry['path'] in expected: raise ValueError('백업 파일 목록에 중복 경로가 있습니다.')
+                if not isinstance(entry['size'],int) or entry['size']<0: raise ValueError('백업 파일 크기가 올바르지 않습니다.')
+                expected[entry['path']]=entry
+        total=sum(e['size'] for e in expected.values());done=0
+        phase(progress,'백업 무결성 검증',total=total)
+        for relative,entry in expected.items():
+            if cancelled(): raise InterruptedError('백업 검증을 취소했습니다.')
+            path=safe_child(bundle,relative)
+            activity(progress,'파일 검증',path)
+            if not path.is_file() or path.stat().st_size!=entry['size'] or digest(path,cancelled,lambda read,_:progress(done+read,total))!=entry['sha256']:
                 raise ValueError(f"백업 파일 검증 실패: {entry['path']}")
+            done+=entry['size'];progress(done,total)
         if 'manifest.json' not in expected: raise ValueError('매니페스트 해시가 없습니다.')
+        phase(progress,'백업 구성 확인')
         actual=set()
         for folder,dirs,names in os.walk(bundle):
+            if cancelled(): raise InterruptedError('백업 검증을 취소했습니다.')
+            activity(progress,'폴더 확인',folder)
             for name in (*dirs,*names): safe_child(bundle,(Path(folder)/name).relative_to(bundle).as_posix())
             for name in names:
                 relative=(Path(folder)/name).relative_to(bundle).as_posix()
