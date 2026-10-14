@@ -40,6 +40,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
           python -m pip install --no-deps -e .
           if ($LASTEXITCODE -ne 0) { throw 'Project installation failed' }
+      - name: Install Codex integration-test runtime
+        run: |
+          $codexTestDir = Join-Path $env:RUNNER_TEMP 'codex-test-runtime'
+          npm install --prefix "$codexTestDir" --no-audit --no-fund @openai/codex@0.160.0
+          if ($LASTEXITCODE -ne 0) { throw 'Codex test runtime installation failed' }
+          $codexNative = Get-ChildItem -LiteralPath "$codexTestDir/node_modules/@openai" -Filter codex.exe -Recurse | Select-Object -First 1
+          if (-not $codexNative) { throw 'Native Codex test executable was not found' }
+          & $codexNative.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw 'Codex test runtime did not start' }
+          $codexNative.DirectoryName >> $env:GITHUB_PATH
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
