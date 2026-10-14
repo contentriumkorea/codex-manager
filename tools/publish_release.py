@@ -57,18 +57,21 @@ def existing_release(tag):
         raise RuntimeError(error.stderr) from error
 
 
-def prepare_draft(tag, title, notes, assets, commit):
+def prepare_draft(tag, title, notes, assets, commit, retarget_draft=False):
     existing = existing_release(tag)
     if existing is not None:
-        if not existing['draft'] or existing['target_commitish'] != commit:
+        if not existing['draft'] or (existing['target_commitish'] != commit and not retarget_draft):
             raise ValueError(f'{tag} is already published or belongs to another commit; bump the version.')
+        if existing['target_commitish'] != commit:
+            gh('release', 'edit', tag, '--target', commit, '--draft', '--title', title,
+               '--notes-file', str(notes), '--repo', REPOSITORY)
         gh('release', 'upload', tag, *map(str, assets), '--clobber', '--repo', REPOSITORY)
     else:
         gh('release', 'create', tag, *map(str, assets), '--draft', '--title', title,
            '--notes-file', str(notes), '--target', commit, '--repo', REPOSITORY)
 
 
-def prepare_application(release, commit, notes):
+def prepare_application(release, commit, notes, setup):
     tag = 'v' + VERSION
     existing = existing_release(tag)
     if existing and not existing['draft']:
@@ -79,11 +82,15 @@ def prepare_application(release, commit, notes):
         # with a new (potentially nondeterministic) build from the same commit.
         published = release.parent / 'published-app'
         published.mkdir(parents=True, exist_ok=True)
-        patterns = [arg for name in PAYLOAD_NAMES for arg in ('--pattern', name)]
+        patterns = [arg for name in (*PAYLOAD_NAMES, INSTALLER_NAME) for arg in ('--pattern', name)]
         gh('release', 'download', tag, '--repo', REPOSITORY, '--dir', str(published), *patterns, '--clobber')
         validate_release(published)
+        if digest(published / INSTALLER_NAME) != digest(setup):
+            raise ValueError('Published compatibility installer differs from the fixed installer.')
         return False
-    prepare_draft(tag, 'Codex Manager ' + VERSION, notes, [release / name for name in PAYLOAD_NAMES], commit)
+    # A byte-identical alias keeps previously shared /latest/download links
+    # working. The canonical installer remains separate and is never rebuilt.
+    prepare_draft(tag, 'Codex Manager ' + VERSION, notes, [*[release / name for name in PAYLOAD_NAMES], setup], commit)
     return True
 
 
@@ -100,7 +107,12 @@ def publish(compiler, release, commit):
     existing_installer = existing_release(INSTALLER_TAG)
     bootstrap_dir = release.parent / INSTALLER_TAG
     bootstrap_dir.mkdir(parents=True, exist_ok=True)
-    if existing_installer and not existing_installer['draft']:
+    complete_installer = existing_installer and {INSTALLER_NAME, 'SHA256SUMS.txt'} <= {
+        asset['name'] for asset in existing_installer.get('assets', [])
+        if asset.get('state') == 'uploaded' and asset.get('size', 0) > 0}
+    reuse_installer = existing_installer and (not existing_installer['draft'] or
+        (existing_installer['target_commitish'] == commit and complete_installer))
+    if reuse_installer:
         # Never rebuild, replace, or edit the installer during app releases.
         gh('release', 'download', INSTALLER_TAG, '--repo', REPOSITORY, '--dir', str(bootstrap_dir),
            '--pattern', INSTALLER_NAME, '--pattern', 'SHA256SUMS.txt', '--clobber')
@@ -111,12 +123,12 @@ def publish(compiler, release, commit):
     else:
         setup = build_bootstrap(compiler, bootstrap_dir)
         prepare_draft(INSTALLER_TAG, 'Windows 설치 프로그램 · 항상 최신 버전 설치',
-                      ROOT / 'docs/installer-release.md', [setup, bootstrap_dir / 'SHA256SUMS.txt'], commit)
-    if prepare_application(release, commit, notes):
+                      ROOT / 'docs/installer-release.md', [setup, bootstrap_dir / 'SHA256SUMS.txt'], commit, retarget_draft=True)
+    if prepare_application(release, commit, notes, setup):
         gh('release', 'edit', tag, '--draft=false', '--latest', '--repo', REPOSITORY)
     if not existing_installer or existing_installer['draft']:
         gh('release', 'edit', INSTALLER_TAG, '--draft=false', '--latest=false', '--repo', REPOSITORY)
-    print(json.dumps({'version': VERSION, 'installer_reused': bool(existing_installer and not existing_installer['draft']),
+    print(json.dumps({'version': VERSION, 'installer_reused': bool(reuse_installer),
                       'installer_sha256': digest(setup), 'installer_bytes': setup.stat().st_size}), flush=True)
 
 

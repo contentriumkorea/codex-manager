@@ -3,6 +3,8 @@ import configparser
 import hashlib
 import importlib.util
 import json
+import sys
+from types import SimpleNamespace
 from pathlib import Path
 import zipfile
 
@@ -79,14 +81,74 @@ def test_publication_can_resume_after_app_is_public_but_installer_is_draft(tmp_p
     existing = {'draft': False, 'target_commitish': commit}
     monkeypatch.setattr(publisher, 'existing_release', lambda tag: existing)
     commands = []
-    monkeypatch.setattr(publisher, 'gh', lambda *args: commands.append(args))
+    setup = tmp_path / 'Codex-Manager-Setup.exe'
+    setup.write_bytes(b'unchanged installer')
+    def download(*args):
+        commands.append(args)
+        destination = Path(args[args.index('--dir') + 1])
+        (destination / setup.name).write_bytes(setup.read_bytes())
+    monkeypatch.setattr(publisher, 'gh', download)
     validated = []
     monkeypatch.setattr(publisher, 'validate_release', lambda path: validated.append(path))
     assert hasattr(publisher, 'prepare_application'), 'Publication needs a safe resume path'
-    assert publisher.prepare_application(tmp_path / 'app', commit, tmp_path / 'notes.md') is False
+    assert publisher.prepare_application(tmp_path / 'app', commit, tmp_path / 'notes.md', setup) is False
     assert len(validated) == 1
     assert commands[0][:2] == ('release', 'download')
     assert all('upload' not in c and 'edit' not in c for c in commands), 'Published app must remain immutable'
     existing['target_commitish'] = 'b' * 40
     with pytest.raises(ValueError, match='commit'):
-        publisher.prepare_application(tmp_path / 'app', commit, tmp_path / 'notes.md')
+        publisher.prepare_application(tmp_path / 'app', commit, tmp_path / 'notes.md', setup)
+
+
+def test_only_unpublished_installer_draft_can_be_retargeted(tmp_path, monkeypatch):
+    publisher = load_tool('publish_release')
+    existing = {'draft': True, 'target_commitish': 'a' * 40}
+    monkeypatch.setattr(publisher, 'existing_release', lambda tag: existing)
+    commands = []
+    monkeypatch.setattr(publisher, 'gh', lambda *args: commands.append(args))
+    publisher.prepare_draft('installer-v1', 'Installer', tmp_path / 'notes', [], 'b' * 40, retarget_draft=True)
+    assert commands[0][:3] == ('release', 'edit', 'installer-v1')
+    assert '--draft' in commands[0] and '--target' in commands[0]
+    existing['draft'] = False
+    with pytest.raises(ValueError):
+        publisher.prepare_draft('installer-v1', 'Installer', tmp_path / 'notes', [], 'b' * 40, retarget_draft=True)
+
+
+def test_new_app_release_keeps_identical_installer_for_old_download_links(tmp_path, monkeypatch):
+    publisher = load_tool('publish_release')
+    monkeypatch.setattr(publisher, 'existing_release', lambda tag: None)
+    setup = tmp_path / 'Codex-Manager-Setup.exe'
+    setup.write_bytes(b'unchanged bootstrap')
+    calls = []
+    monkeypatch.setattr(publisher, 'prepare_draft', lambda *args: calls.append(args))
+    assert publisher.prepare_application(tmp_path / 'app', 'a' * 40, tmp_path / 'notes', setup)
+    assert calls[0][3][-1] == setup
+    assert setup.read_bytes() == b'unchanged bootstrap'
+
+
+def test_full_publisher_retry_reuses_draft_binary_instead_of_rebuilding(tmp_path, monkeypatch):
+    publisher = load_tool('publish_release')
+    commit = 'a' * 40
+    setup_bytes = b'previously uploaded installer'
+    sha = hashlib.sha256(setup_bytes).hexdigest()
+    installer = {'draft': True, 'target_commitish': commit, 'assets': [
+        {'name': 'Codex-Manager-Setup.exe', 'state': 'uploaded', 'size': len(setup_bytes)},
+        {'name': 'SHA256SUMS.txt', 'state': 'uploaded', 'size': 91}]}
+    app = {'draft': False, 'target_commitish': commit}
+    monkeypatch.setattr(publisher, 'existing_release', lambda tag: installer if tag == 'installer-v1' else app)
+    monkeypatch.setattr(publisher, 'validate_release', lambda path: {})
+    def must_not_rebuild(*args, **kwargs):
+        pytest.fail('Rebuilding changes the published compatibility installer hash')
+    monkeypatch.setitem(sys.modules, 'build_bootstrap', SimpleNamespace(build_bootstrap=must_not_rebuild, MAX_SIZE=5242880))
+    commands = []
+    def gh(*args):
+        commands.append(args)
+        if args[:2] == ('release', 'download'):
+            dest = Path(args[args.index('--dir') + 1])
+            (dest / 'Codex-Manager-Setup.exe').write_bytes(setup_bytes)
+            (dest / 'SHA256SUMS.txt').write_text(sha + '  Codex-Manager-Setup.exe\n')
+    monkeypatch.setattr(publisher, 'gh', gh)
+    publisher.publish(tmp_path / 'compiler', tmp_path / 'app', commit)
+    edits = [c for c in commands if c[:2] == ('release', 'edit')]
+    assert len(edits) == 1 and edits[0][2] == 'installer-v1' and '--draft=false' in edits[0]
+    assert not any(c[:2] == ('release', 'upload') for c in commands)
