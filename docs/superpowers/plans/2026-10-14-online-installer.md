@@ -44,7 +44,7 @@
 
 - [x] Create native fixture-server tests; verify they fail before implementation.
 - [x] Implement download/extraction progress, target/running-file guards and actual app version registration.
-- [x] Run same bootstrap against two versions; test bad hash, unavailable payload/manifest, cancellation/error preservation, version, shortcuts, startup, updater compatibility and uninstallation.
+- [x] Run same bootstrap against two versions; test bad hash, unavailable payload/manifest, download/extraction error preservation, version, shortcuts, startup, updater compatibility and uninstallation.
 - [x] Run full regression suite and a read-only whole-change review; fix reproduced issues.
 
 ### Task 3: Public release and local installation
@@ -54,9 +54,9 @@
 **Interfaces:** workflow publishes immutable `installer-v1` only when absent, and versioned app assets with the app release marked latest; README links directly to the fixed installer.
 
 - [x] Prepare fixed-link documentation and Windows release workflow with only contents-write permission and pinned build dependencies.
-- [ ] Publish reviewed source and app/installer releases; verify public installer size/hash, ZIP/INI/JSON consistency and old-client update discovery.
-- [ ] Exercise public installation in an isolated directory, then update the user's local app with retained settings and a verified rollback copy.
-- [ ] Record exact test results, asset URLs and installed version; report any actual publication limitation.
+- [x] Publish reviewed source and app/installer releases; verify public installer size/hash, ZIP/INI/JSON consistency and old-client update discovery.
+- [x] Exercise public installation in an isolated directory, then update the user's local app with retained settings and a verified rollback copy.
+- [x] Record exact test results, asset URLs and installed version; report any actual publication limitation.
 
 ## Execution ledger
 
@@ -67,3 +67,6 @@
 - 2026-10-14: Local release 0.10.3 built. Production bootstrap: 2,623,477 bytes. Same QA executable installed two channel versions; 14 native fixture cases and actual app install/start/update/uninstall passed (`.test-artifacts/bootstrap-qa-final/verification.json`). Full regression 256 passed, 2 platform skips; subsequent publisher-focused suite 10 passed.
 - Review fixes: recover an unpublished fixed-installer draft after a source commit change; resume partial app/installer publication without overwriting published app assets; reuse a byte-identical installer alias for old `/latest/download` links. Canonical install assets remain under `installer-v1`.
 - Evidence note: an interrupted desktop session left NUL-filled aggregate logs from the first run. Source files were checked, payload hashes revalidated, and both native QA and full regression were rerun with tool-captured output. The fresh QA reports are valid JSON.
+
+- Completed: public source e50a639, successful Actions run 38540834234 (259 passed, 2 offscreen skips); 6 native Windows tests passed locally. Published installer-v1 and v0.10.3. Public installer and legacy URL hashes match; all 219 app files verified; public-channel install/update/uninstall passed.
+- User PC upgraded from 0.10.2 to 0.10.3 using the public 2,623,477-byte installer. Old program retained, settings/journal preserved, Start Menu/taskbar/Windows uninstall records and startup verified. Details: `docs/release-verification-0.10.3.md`.
