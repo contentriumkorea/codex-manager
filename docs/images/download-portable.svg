@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="238" height="54" viewBox="0 0 238 54" role="img" aria-label="포터블 ZIP 다운로드">
+  <rect x=".5" y=".5" width="237" height="53" rx="11" fill="#edf3fc" stroke="#c5d4ed"/>
+  <path d="M17 20h10l4 4h8v14H17z" fill="none" stroke="#254b8e" stroke-width="2" stroke-linejoin="round"/>
+  <text x="53" y="34" font-family="Malgun Gothic, Noto Sans KR, sans-serif" font-size="17" font-weight="600" fill="#254b8e">포터블 ZIP 다운로드</text>
+</svg>

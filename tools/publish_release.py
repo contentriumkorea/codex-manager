@@ -11,7 +11,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
+sys.path.insert(0, str(ROOT / 'tools'))
 from project_manager.version import VERSION, REPOSITORY, ASSET_NAME
+from release_payload import validate_archive
 
 INSTALLER_TAG = 'installer-v1'
 INSTALLER_NAME = 'Codex-Manager-Setup.exe'
@@ -41,6 +43,7 @@ def validate_release(release):
     checksums = dict(line.split('  ', 1)[::-1] for line in (release / 'SHA256SUMS.txt').read_text().splitlines())
     if checksums != {name: digest(release / name) for name in PAYLOAD_NAMES[:-1]}:
         raise ValueError('Release checksums do not match.')
+    validate_archive(archive, VERSION)
     return metadata
 
 
@@ -55,6 +58,28 @@ def existing_release(tag):
         if 'HTTP 404' in error.stderr:
             return None
         raise RuntimeError(error.stderr) from error
+
+
+def latest_release():
+    try:
+        return json.loads(gh('api', f'repos/{REPOSITORY}/releases/latest'))
+    except subprocess.CalledProcessError as error:
+        if 'HTTP 404' in error.stderr:
+            return None
+        raise RuntimeError(error.stderr) from error
+
+
+def rollback_publication(tag, previous):
+    from verify_public_release import verify_rollback
+    previous_tag = previous['tag_name'] if previous else None
+    if previous_tag == tag:
+        raise ValueError('Cannot roll back a release to itself.')
+    if previous_tag:
+        gh('release', 'edit', previous_tag, '--latest', '--repo', REPOSITORY)
+    gh('release', 'edit', tag, '--draft', '--repo', REPOSITORY)
+    if not existing_release(tag)['draft']:
+        raise RuntimeError('Failed release was not returned to draft.')
+    verify_rollback(previous_tag)
 
 
 def prepare_draft(tag, title, notes, assets, commit, retarget_draft=False):
@@ -124,10 +149,30 @@ def publish(compiler, release, commit):
         setup = build_bootstrap(compiler, bootstrap_dir)
         prepare_draft(INSTALLER_TAG, 'Windows 설치 프로그램 · 항상 최신 버전 설치',
                       ROOT / 'docs/installer-release.md', [setup, bootstrap_dir / 'SHA256SUMS.txt'], commit, retarget_draft=True)
-    if prepare_application(release, commit, notes, setup):
-        gh('release', 'edit', tag, '--draft=false', '--latest', '--repo', REPOSITORY)
-    if not existing_installer or existing_installer['draft']:
-        gh('release', 'edit', INSTALLER_TAG, '--draft=false', '--latest=false', '--repo', REPOSITORY)
+    new_app = prepare_application(release, commit, notes, setup)
+    previous = latest_release()
+    if previous and not re.fullmatch(r'v\d+\.\d+\.\d+', previous['tag_name']):
+        # Never redirect another product/channel's latest release automatically.
+        raise ValueError('Latest belongs to a separate release channel; review publication routing.')
+    (release.parent / 'publication-before.json').write_text(json.dumps({
+        'version': VERSION, 'commit': commit, 'previous': previous,
+        'fixed_installer_sha256': digest(setup)}, indent=2), encoding='utf-8')
+    made_public = False
+    try:
+        if new_app:
+            # Mark intent before the request: a lost response may still have published it.
+            made_public = True
+            gh('release', 'edit', tag, '--draft=false', '--latest', '--repo', REPOSITORY)
+        if not existing_installer or existing_installer['draft']:
+            gh('release', 'edit', INSTALLER_TAG, '--draft=false', '--latest=false', '--repo', REPOSITORY)
+        from verify_public_release import verify
+        verify(release.parent / 'public-verification', commit, compiler,
+               expected_release=release if new_app else release.parent / 'published-app', installer_sha=digest(setup))
+    except Exception:
+        if made_public:
+            rollback_publication(tag, previous)
+            print(json.dumps({'state': 'rolled_back', 'previous': previous['tag_name'] if previous else None}), flush=True)
+        raise
     print(json.dumps({'version': VERSION, 'installer_reused': bool(reuse_installer),
                       'installer_sha256': digest(setup), 'installer_bytes': setup.stat().st_size}), flush=True)
 

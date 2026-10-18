@@ -1,5 +1,5 @@
 APP_NAME='Codex Manager'
-VERSION='0.10.3'
+VERSION='0.10.4'
 REPOSITORY='contentriumkorea/codex-manager'
 REPOSITORY_URL='https://github.com/'+REPOSITORY
 EXECUTABLE='CodexManager.exe'

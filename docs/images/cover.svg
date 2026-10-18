@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Manager</title>
+  <desc id="desc">프로젝트 폴더와 대화 카드를 하나로 모아 보관하는 모습을 담은 밝은 파란색 커버.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#eef7fa"/><stop offset=".55" stop-color="#e7edff"/><stop offset="1" stop-color="#d9e4fa"/></linearGradient>
+    <linearGradient id="glass" x2="1" y2="1"><stop stop-color="white" stop-opacity=".94"/><stop offset="1" stop-color="white" stop-opacity=".48"/></linearGradient>
+    <linearGradient id="folder" x2="0" y2="1"><stop stop-color="#5c8be8"/><stop offset="1" stop-color="#3768c7"/></linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="28" fill="url(#bg)"/>
+  <circle cx="1040" cy="48" r="190" fill="#c8d6fa" opacity=".38"/>
+  <circle cx="648" cy="356" r="175" fill="#d4e9ef" opacity=".65"/>
+  <g font-family="Segoe UI, Arial, sans-serif" fill="#172d50">
+    <text x="64" y="113" font-size="19" letter-spacing="4" fill="#516a8d">CONTENTRIUM</text>
+    <text x="60" y="194" font-size="65" font-weight="650" letter-spacing="-2">Codex Manager</text>
+    <text x="64" y="246" font-size="25" fill="#4b6489">Projects + conversations. Together.</text>
+  </g>
+  <path d="M738 186h74m-12-12 13 12-13 12" fill="none" stroke="#6485bb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="847" y="71" width="246" height="210" rx="23" fill="#a4b7da" opacity=".18"/>
+  <rect x="836" y="60" width="246" height="210" rx="23" fill="url(#glass)" stroke="white" stroke-width="2"/>
+  <path d="M867 107v-14a8 8 0 0 1 8-8h31l13 14h54a8 8 0 0 1 8 8v60a9 9 0 0 1-9 9h-96a9 9 0 0 1-9-9z" fill="url(#folder)"/>
+  <rect x="868" y="198" width="163" height="8" rx="4" fill="#c1d2ed"/>
+  <rect x="868" y="218" width="111" height="8" rx="4" fill="#dbe4f2"/>
+  <rect x="970" y="143" width="147" height="151" rx="21" fill="#c1cee9" opacity=".28"/>
+  <rect x="961" y="135" width="147" height="151" rx="21" fill="url(#glass)" stroke="white" stroke-width="2"/>
+  <path d="M993 164h84v57h-50l-20 15v-15h-14z" fill="#273c60"/>
+  <path d="M1009 182h51m-51 13h34" stroke="#f2f6fd" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="1089" cy="276" r="20" fill="#4876ce" stroke="#edf3ff" stroke-width="3"/>
+  <path d="m1080 276 6 6 12-13" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

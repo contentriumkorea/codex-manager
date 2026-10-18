@@ -43,22 +43,46 @@ def property_store(hwnd):
     finally:method(store,2)(store)
 
 
+def write_shortcut(path,executable,arguments,icon):
+    # IShellLinkW/IPersistFile preserve Unicode paths; WScript.Shell can lose
+    # non-ACP characters when saving the shortcut on Windows.
+    ole=ctypes.WinDLL('ole32')
+    ole.CoInitializeEx.argtypes=[ctypes.c_void_p,ctypes.c_ulong];ole.CoInitializeEx.restype=ctypes.c_long
+    hr=ole.CoInitializeEx(None,2)
+    if hr<0 and (hr & 0xffffffff)!=0x80010106:check(hr)
+    link=ctypes.c_void_p();persist=ctypes.c_void_p()
+    try:
+        create=ole.CoCreateInstance
+        create.argtypes=[ctypes.POINTER(GUID),ctypes.c_void_p,ctypes.c_ulong,ctypes.POINTER(GUID),ctypes.POINTER(ctypes.c_void_p)]
+        create.restype=ctypes.c_long
+        clsid=GUID.parse('00021401-0000-0000-C000-000000000046')
+        iid=GUID.parse('000214F9-0000-0000-C000-000000000046')
+        check(create(ctypes.byref(clsid),None,1,ctypes.byref(iid),ctypes.byref(link)))
+        for index,value in ((20,str(executable)),(11,arguments),(9,str(executable.parent)),(7,'Codex Manager')):
+            check(method(link,index,ctypes.c_wchar_p)(link,value))
+        check(method(link,17,ctypes.c_wchar_p,ctypes.c_int)(link,str(icon),0))
+        persist_iid=GUID.parse('0000010b-0000-0000-C000-000000000046')
+        check(method(link,0,ctypes.POINTER(GUID),ctypes.POINTER(ctypes.c_void_p))(
+            link,ctypes.byref(persist_iid),ctypes.byref(persist)))
+        check(method(persist,6,ctypes.c_wchar_p,ctypes.c_int)(persist,str(path),1))
+    finally:
+        if persist:method(persist,2)(persist)
+        if link:method(link,2)(link)
+        if hr>=0:ole.CoUninitialize()
+
+
 def register_window(hwnd,executable,icon,state_dir):
     executable=Path(executable).resolve();icon=Path(icon).resolve();state_dir=Path(state_dir).resolve()
     command=subprocess.list2cmdline([str(executable),'-s',str(state_dir)])
-    if len(command)>=260:
-        # The window property has a MAX_PATH limit even when each path is valid.
+    if len(command.encode('utf-16-le'))//2>255:
+        # Windows rejects this property above 255 UTF-16 units, before MAX_PATH.
+        # Count surrogate pairs too, so emoji paths use the same safe fallback.
         # ShellExecute also accepts a shortcut, whose arguments keep the full state path.
         shortcut=state_dir/'taskbar-relaunch.lnk';temporary=state_dir/(uuid.uuid4().hex+'.lnk')
-        literal=lambda value:"'"+str(value).replace("'","''")+"'"
-        script=(f"$ErrorActionPreference='Stop'; $s=(New-Object -ComObject WScript.Shell).CreateShortcut({literal(temporary)}); "
-                f"$s.TargetPath={literal(executable)}; $s.Arguments={literal(subprocess.list2cmdline(['-s',str(state_dir)]))}; "
-                f"$s.WorkingDirectory={literal(executable.parent)}; $s.IconLocation={literal(str(icon)+',0')}; $s.Save()")
         try:
-            subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',script],check=True,timeout=10,
-                           capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW)
+            write_shortcut(temporary,executable,subprocess.list2cmdline(['-s',str(state_dir)]),icon)
             temporary.replace(shortcut)
-        except (OSError,subprocess.SubprocessError) as exc:raise OSError('Taskbar relaunch shortcut could not be created.') from exc
+        except OSError as exc:raise OSError('Taskbar relaunch shortcut could not be created.') from exc
         finally:temporary.unlink(missing_ok=True)
         command=subprocess.list2cmdline([str(shortcut)])
     values={2:command,3:str(icon)+',0',4:'Codex Manager',5:APP_ID}

@@ -44,3 +44,29 @@ def test_long_relaunch_command_keeps_taskbar_identity_and_exact_state(qtbot,tmp_
         assert Path(link['target'])==executable and Path(link['cwd'])==executable.parent
         assert link['args']==subprocess.list2cmdline(['-s',str(state)])
     finally:clear_window(int(widget.winId()))
+
+
+@pytest.mark.skipif(sys.platform!='win32',reason='Windows property store')
+@pytest.mark.parametrize('units,astral', [(255, False), (256, False), (258, False), (256, True), (258, True)])
+def test_relaunch_at_windows_property_length_boundary(qtbot,tmp_path,qapp,units,astral):
+    if qapp.platformName()!='windows':pytest.skip('A real Windows HWND is required')
+    import subprocess
+    from project_manager.windows_shell import register_window,window_properties,clear_window
+    widget=QWidget();qtbot.addWidget(widget)
+    executable=tmp_path/'한국어 앱'/'CodexManager.exe';executable.parent.mkdir();executable.write_bytes(b'fixture')
+    icon=executable.with_suffix('.ico');icon.write_bytes(b'fixture')
+    state=tmp_path/('설정' + ('📁' if astral else ''))
+    base=subprocess.list2cmdline([str(executable),'-s',str(state)])
+    state=state.with_name(state.name+'x'*(units-len(base.encode('utf-16-le'))//2));state.mkdir()
+    command=subprocess.list2cmdline([str(executable),'-s',str(state)])
+    assert len(command.encode('utf-16-le'))//2==units
+    try:
+        register_window(int(widget.winId()),executable,icon,state)
+        values=window_properties(int(widget.winId()))
+        assert values[5]=='Contentrium.CodexManager'
+        if units<=255:assert values[2]==command
+        else:
+            shortcut=Path(values[2].strip('"'))
+            assert shortcut==state/'taskbar-relaunch.lnk'
+            assert subprocess.list2cmdline(['-s',str(state)]).encode('utf-16-le') in shortcut.read_bytes()
+    finally:clear_window(int(widget.winId()))

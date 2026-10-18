@@ -137,6 +137,8 @@ def test_full_publisher_retry_reuses_draft_binary_instead_of_rebuilding(tmp_path
     app = {'draft': False, 'target_commitish': commit}
     monkeypatch.setattr(publisher, 'existing_release', lambda tag: installer if tag == 'installer-v1' else app)
     monkeypatch.setattr(publisher, 'validate_release', lambda path: {})
+    monkeypatch.setattr(publisher, 'latest_release', lambda: {'tag_name': 'v' + publisher.VERSION})
+    monkeypatch.setitem(sys.modules, 'verify_public_release', SimpleNamespace(verify=lambda *a, **k: None))
     def must_not_rebuild(*args, **kwargs):
         pytest.fail('Rebuilding changes the published compatibility installer hash')
     monkeypatch.setitem(sys.modules, 'build_bootstrap', SimpleNamespace(build_bootstrap=must_not_rebuild, MAX_SIZE=5242880))
@@ -152,3 +154,87 @@ def test_full_publisher_retry_reuses_draft_binary_instead_of_rebuilding(tmp_path
     edits = [c for c in commands if c[:2] == ('release', 'edit')]
     assert len(edits) == 1 and edits[0][2] == 'installer-v1' and '--draft=false' in edits[0]
     assert not any(c[:2] == ('release', 'upload') for c in commands)
+
+
+@pytest.mark.parametrize('name', ['AUTH.JSON', '.env.production', 'sessions/chat.JSONL',
+                                  '_internal/state.SQLITE', 'settings.json', 'unins000.exe'])
+def test_build_rejects_private_or_installed_state_before_creating_release(tmp_path, name):
+    dist = tmp_path / 'dist'
+    (dist / '_internal').mkdir(parents=True)
+    (dist / 'CodexManager.exe').write_bytes(b'fixture')
+    private = dist / name
+    private.parent.mkdir(parents=True, exist_ok=True)
+    private.write_bytes(b'private fixture data')
+    with pytest.raises(ValueError):
+        load_tool('build_release').build(dist, tmp_path / 'release')
+    assert not (tmp_path / 'release').exists()
+
+
+@pytest.mark.parametrize('bad_name', ['CodexManager/../escape.dll', 'CodexManager/AUTH.JSON',
+                                     'CodexManager/CON.txt', 'Other/app.exe'])
+def test_release_validation_rejects_unsafe_payload_paths(tmp_path, bad_name):
+    archive = tmp_path / 'bad.zip'
+    with zipfile.ZipFile(archive, 'w') as z:
+        z.writestr(bad_name, b'bad')
+    with pytest.raises(ValueError):
+        load_tool('release_payload').validate_archive(archive, '1.2.3')
+
+
+def test_release_validation_detects_tampered_file_even_when_zip_and_channel_hashes_match(tmp_path):
+    dist = tmp_path / 'dist'
+    (dist / '_internal').mkdir(parents=True)
+    (dist / 'CodexManager.exe').write_bytes(b'fixture')
+    (dist / '_internal/library.dll').write_bytes(b'library')
+    archive = load_tool('build_release').build(dist, tmp_path / 'release')
+    with zipfile.ZipFile(archive) as z:
+        entries = {n: z.read(n) for n in z.namelist()}
+    entries['CodexManager/CodexManager.exe'] = b'corrupted executable'
+    with zipfile.ZipFile(archive, 'w') as z:
+        for name, value in entries.items():
+            z.writestr(name, value)
+    with pytest.raises(ValueError, match='checksum mismatch'):
+        load_tool('release_payload').validate_archive(archive, load_tool('build_release').VERSION)
+
+
+def test_rollback_restores_previous_latest_then_drafts_failed_release(tmp_path, monkeypatch):
+    publisher = load_tool('publish_release')
+    commands, anonymous_checks = [], []
+    monkeypatch.setattr(publisher, 'gh', lambda *args: commands.append(args))
+    monkeypatch.setattr(publisher, 'existing_release', lambda tag: {'draft': True})
+    monkeypatch.setitem(sys.modules, 'verify_public_release', SimpleNamespace(verify_rollback=anonymous_checks.append))
+    publisher.rollback_publication('v1.2.4', {'tag_name': 'v1.2.3'})
+    assert commands[0][:4] == ('release', 'edit', 'v1.2.3', '--latest')
+    assert commands[1][:4] == ('release', 'edit', 'v1.2.4', '--draft')
+    assert anonymous_checks == ['v1.2.3']
+    assert all('delete' not in command for command in commands)
+
+
+def test_new_publication_failure_triggers_rollback_and_keeps_fixed_installer(tmp_path, monkeypatch):
+    publisher = load_tool('publish_release')
+    setup_bytes = b'fixed installer'
+    installer = {'draft': False, 'target_commitish': 'b' * 40, 'assets': []}
+    previous = {'tag_name': 'v0.10.3'}
+    monkeypatch.setattr(publisher, 'existing_release', lambda tag: installer)
+    monkeypatch.setattr(publisher, 'latest_release', lambda: previous)
+    monkeypatch.setattr(publisher, 'validate_release', lambda path: {})
+    monkeypatch.setattr(publisher, 'prepare_application', lambda *args: True)
+    monkeypatch.setitem(sys.modules, 'build_bootstrap', SimpleNamespace(MAX_SIZE=5242880))
+    def fail_verification(*args, **kwargs):
+        raise ValueError('public download corrupt')
+    monkeypatch.setitem(sys.modules, 'build_bootstrap', SimpleNamespace(
+        MAX_SIZE=5242880, build_bootstrap=lambda *a: pytest.fail('Must reuse fixed installer')))
+    monkeypatch.setitem(sys.modules, 'verify_public_release', SimpleNamespace(verify=fail_verification))
+    commands, rollbacks = [], []
+    def gh(*args):
+        commands.append(args)
+        if args[:2] == ('release', 'download'):
+            dest = Path(args[args.index('--dir') + 1])
+            (dest / publisher.INSTALLER_NAME).write_bytes(setup_bytes)
+            (dest / 'SHA256SUMS.txt').write_text(hashlib.sha256(setup_bytes).hexdigest() + '  ' + publisher.INSTALLER_NAME)
+    monkeypatch.setattr(publisher, 'gh', gh)
+    monkeypatch.setattr(publisher, 'rollback_publication', lambda *args: rollbacks.append(args))
+    with pytest.raises(ValueError, match='public download corrupt'):
+        publisher.publish(tmp_path / 'compiler', tmp_path / 'app', 'a' * 40)
+    assert rollbacks == [('v' + publisher.VERSION, previous)]
+    assert json.loads((tmp_path / 'publication-before.json').read_text())['previous'] == previous
+    assert not any(c[:3] == ('release', 'edit', 'installer-v1') for c in commands)

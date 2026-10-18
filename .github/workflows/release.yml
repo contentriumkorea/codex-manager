@@ -75,6 +75,12 @@ jobs:
         run: |
           python tools/verify_bootstrap.py --compiler "$env:ISCC" --root .test-artifacts/bootstrap --release releases/app
           if ($LASTEXITCODE -ne 0) { throw 'Native installer verification failed' }
+      - name: Verify portable ZIP without installation
+        run: |
+          python -m pytest tests/ui/test_windows_shell.py tests/ui/test_job_progress.py -q
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows regression failed' }
+          python tools/verify_portable.py --release releases/app --root .test-artifacts/portable
+          if ($LASTEXITCODE -ne 0) { throw 'Portable verification failed' }
       - name: Publish immutable installer and versioned application
         run: |
           python tools/publish_release.py --compiler "$env:ISCC" --release releases/app --commit "$env:GITHUB_SHA"

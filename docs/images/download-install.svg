@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="238" height="54" viewBox="0 0 238 54" role="img" aria-label="Windows 설치형 다운로드">
+  <rect x=".5" y=".5" width="237" height="53" rx="11" fill="#254b8e" stroke="#254b8e"/>
+  <path d="M26 17v17m-6-6 6 6 6-6m-15 10h18" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="48" y="33" font-family="Malgun Gothic, Noto Sans KR, sans-serif" font-size="15" font-weight="600" fill="white">설치형 다운로드 · 2.5 MB</text>
+</svg>

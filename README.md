@@ -1,64 +1,56 @@
+![Codex Manager — 프로젝트와 대화를 함께 정리하고 옮기는 Windows 앱](docs/images/cover.svg)
+
 # Codex Manager
 
-## [⬇ Windows 설치 프로그램 다운로드 · 약 2.5 MB](https://github.com/contentriumkorea/codex-manager/releases/download/installer-v1/Codex-Manager-Setup.exe)
+Codex의 **프로젝트·대화·작업 파일을 한곳에서 관리**하세요. 외장하드에 함께 보관하고, 다른 컴퓨터에서 원하는 프로젝트로 가져올 수 있습니다.
 
-**실행하면 최신 버전을 자동으로 내려받아 설치합니다.** 작은 `Codex-Manager-Setup.exe`를 한 번 받아 두면, 다음 버전이 나와도 같은 설치파일로 최신 버전을 설치할 수 있습니다. 인터넷 연결이 필요하며 앱 본체는 별도로 내려받습니다. 설치할 드라이브와 폴더를 선택한 뒤 시작 메뉴에서 **Codex Manager**를 검색하세요. Python 설치나 직접 압축 해제가 필요 없습니다.
+<p>
+<a href="https://github.com/contentriumkorea/codex-manager/releases/download/installer-v1/Codex-Manager-Setup.exe"><img src="docs/images/download-install.svg" alt="Windows 설치형 다운로드 — 약 2.5 MB" width="238"></a>
+<a href="https://github.com/contentriumkorea/codex-manager/releases/latest/download/Codex-Manager-Windows-x64.zip"><img src="docs/images/download-portable.svg" alt="설치 없이 실행하는 포터블 ZIP 다운로드" width="238"></a>
+</p>
 
-Codex의 프로젝트·대화·작업 파일을 함께 정리하고, 외장하드에 보관하거나 다른 컴퓨터로 가져오는 Windows 앱입니다.
+**Windows x64** · 설치파일을 실행하면 최신 앱을 자동으로 내려받습니다. 인터넷 연결이 필요하며, 받은 설치파일은 다음 버전에도 그대로 사용할 수 있습니다.
 
-![Codex Manager 화면](docs/images/manager.png)
+## 작업에 집중할 수 있도록
 
-### 다른 컴퓨터로 옮기기
+- **탐색기처럼 정리** — 여러 항목 선택, 끌어 놓기, 열 제목 정렬, F2 이름 변경과 Delete 삭제.
+- **프로젝트와 대화를 함께 관리** — 이름 변경, 대화 이동, 프로젝트 합치기와 폴더 연결 관리.
+- **외장하드로 보내고 다른 PC로 가져오기** — 백업 상위 폴더를 선택하면 프로젝트를 찾아 새로 만들거나 기존 프로젝트에 합칩니다.
+- **진행 상황과 복구 확인** — 전송 속도·처리 용량·경과 시간·예상 남은 시간, 작업 내역과 복구 가능한 삭제.
+
+![예시 프로젝트로 촬영한 Codex Manager 실제 앱 화면](docs/images/manager.png)
+
+## 설치하고 시작하기
+
+| 설치형 — 처음 사용하는 경우 | 포터블 — 설치 없이 실행 |
+| --- | --- |
+| 위의 **설치형 다운로드** → 실행 → 설치 폴더 선택 | 위의 **포터블 ZIP** → 새 폴더에 압축 해제 |
+| 시작 메뉴에서 **Codex Manager** 실행 | `CodexManager/CodexManager.exe` 실행 |
+| Windows 설정에서 제거 가능 | 실행 파일과 `_internal` 폴더를 함께 보관 |
+
+시작할 때 업데이트를 확인하고 미리 준비합니다. **지금 업데이트**를 누르면 설치 후 다시 실행하며, 왼쪽 **업데이트**에서도 확인할 수 있습니다.
+
+## 다른 컴퓨터로 옮기기
 
 1. **원래 컴퓨터:** 프로젝트 선택 → **보내기…** → 외장하드 폴더 선택.
-2. **다른 컴퓨터:** Codex와 Codex Manager 설치 → **가져오기…** → 백업이 들어 있는 상위 폴더 선택.
-3. 자동으로 찾은 프로젝트를 선택하고 **새 프로젝트로 가져오기** 또는 **기존 프로젝트에 합치기**를 고릅니다. 저장 위치를 확인하고 시작하세요.
+2. **다른 컴퓨터:** Codex와 Manager 준비 → **가져오기…** → 백업이 들어 있는 상위 폴더 선택.
+3. **새 프로젝트로 가져오기** 또는 **기존 프로젝트에 합치기**를 고르고 저장 위치를 확인합니다.
 
-파일과 대화를 함께 옮깁니다. 기존 프로젝트에 합치면 그 프로젝트의 이름을 유지합니다. 파일은 별도 폴더에 들어가며, 같은 대화가 이미 있으면 기존 기록을 유지하도록 선택할 수 있습니다. 원래 컴퓨터와 외장하드의 내용은 자동으로 삭제하지 않습니다.
+기존 프로젝트에 합치면 대상 프로젝트 이름을 유지합니다. 원래 컴퓨터와 외장하드의 내용은 자동으로 삭제하지 않습니다. 프로젝트 연결 변경·가져오기·삭제는 Codex 앱을 종료한 뒤 진행하세요. 조회와 보내기는 Codex 실행 중에도 사용할 수 있습니다.
 
-작업 중에는 현재 단계, 처리 용량, 전송 속도, 총 경과 시간과 복사 단계의 예상 남은 시간을 표시합니다. 파일 복사 뒤에는 대화 저장과 검증 진행률이 이어집니다. 여러 프로젝트를 처리하면 현재 프로젝트와 순서도 볼 수 있습니다.
+**프로그램 ZIP은 작업 백업과 별개입니다.** 설치형과 포터블 모두 Manager 설정은 `%LOCALAPPDATA%/ProjectConversationManager`에 저장합니다. Codex 대화는 사용하는 Codex 데이터 위치에, 작업 파일은 프로젝트 폴더에 있습니다. 대화와 파일을 함께 옮길 때는 **보내기 / 가져오기**를 사용하세요.
 
-### 삭제와 정리
-
-- **삭제… / Delete:** 복구 가능 삭제 또는 완전 삭제를 선택합니다. 작업 파일 삭제는 별도 체크입니다.
-- **복구 가능 삭제:** 이 컴퓨터에 복구 사본을 자동 저장합니다. 보관 위치를 매번 고를 필요가 없습니다.
-- **완전 삭제:** 복구 사본과 휴지통 없이 삭제합니다. 확인 체크 후 실행하며 되돌릴 수 없습니다.
-- **이름 변경 / F2**, 여러 항목 선택, 끌어 놓기, 열 제목 클릭 정렬을 지원합니다. 추가 관리 기능은 **더 보기**와 우클릭 메뉴에 있습니다.
-
-프로젝트 연결 변경·가져오기·삭제는 Codex 앱을 종료한 뒤 진행합니다. 조회와 보내기는 Codex 실행 중에도 사용할 수 있습니다.
-
-### 업데이트
-
-시작할 때 새 버전을 확인하고 미리 다운로드·검증합니다. **지금 업데이트**를 누르면 준비된 버전을 설치하고 다시 실행합니다. 왼쪽 **업데이트**에서도 확인할 수 있습니다. 설정, 대화, 작업 파일과 백업은 유지합니다.
-
-[사용 안내](docs/user-guide.md) · [변경 내용](https://github.com/contentriumkorea/codex-manager/releases/latest) · [문제 신고](https://github.com/contentriumkorea/codex-manager/issues)
+[사용 안내와 단축키](docs/user-guide.md) · [최신 변경 내용](https://github.com/contentriumkorea/codex-manager/releases/latest) · [문제 신고](https://github.com/contentriumkorea/codex-manager/issues)
 
 <details>
-<summary>설치 없이 사용하는 포터블 버전</summary>
+<summary>검증 범위와 개발 자료</summary>
 
-[포터블 ZIP 다운로드](https://github.com/contentriumkorea/codex-manager/releases/latest/download/Codex-Manager-Windows-x64.zip) → 압축 해제 → `CodexManager/CodexManager.exe` 실행. 실행 파일과 `_internal`을 포함한 폴더 전체를 함께 보관하세요. 처음 사용하는 경우 위의 설치 프로그램을 권장합니다.
+파일과 대화의 이동·합치기·삭제는 격리된 테스트 저장소에서 검증합니다. 실제 계정의 두 번째 물리 PC 이어쓰기와 모바일 표시는 별도 검수가 필요합니다. [호환성 및 검증 범위](docs/compatibility.md)를 확인하세요.
 
-</details>
-
-<details>
-<summary>개발과 검증</summary>
-
-```powershell
-.venv/Scripts/python.exe -m pytest -q
-.venv/Scripts/python.exe -m PyInstaller --noconfirm --clean packaging/project-manager.spec
-.venv/Scripts/python.exe tools/build_release.py
-.venv/Scripts/python.exe tools/build_bootstrap.py --compiler "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
-.venv/Scripts/python.exe tools/verify_bootstrap.py --compiler "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" --release releases/v0.10.3 --root .test-artifacts/bootstrap-verification
-.venv/Scripts/python.exe tools/verify_update.py --release releases/v0.10.3 --root .test-artifacts/update-verification
-.venv/Scripts/python.exe tools/acceptance.py --isolated-root .test-artifacts/new-check --report .test-artifacts/report.json --fixture-only
-```
-
-`installer-v1`에는 고정 설치파일과 검증값만 보관합니다. `vX.Y.Z`에는 앱 본체 ZIP, `update.json`, `install.ini`, `SHA256SUMS.txt`를 게시합니다. 설치와 앱 업데이트가 같은 검증된 ZIP을 사용합니다. 설치 프로그램은 [Inno Setup](https://jrsoftware.org/) 6.7.3으로 만들며 앱 버전마다 다시 만들지 않습니다.
-
-`main`의 버전 변경 또는 GitHub Actions의 **Windows release** 수동 실행으로 전체 테스트 → 앱 빌드 → 실제 설치·업데이트·제거 검증 → 공개 배포를 진행합니다. 공개된 버전과 설치파일은 덮어쓰지 않습니다. [배포 구조와 유지보수](docs/releasing.md)를 참고하세요. 인터넷 없이 설치해야 하는 개발용 전체 설치파일은 `tools/build_setup.py`로 별도 생성하며 일반 다운로드에 게시하지 않습니다.
-
-[호환성 및 검증 범위](docs/compatibility.md). 실제 계정 이어쓰기·두 번째 물리 PC·모바일은 별도 검수가 필요합니다. 자동 검증은 격리 저장소를 사용하며 사용자 원본을 삭제하지 않습니다.
+[개발·배포 안내](docs/releasing.md) · [0.10.4 배포 점검 범위](docs/release-audit-0.10.4.md)
 
 </details>
 
 로컬 Codex용 독립 도구이며 OpenAI 공식 제품은 아닙니다.
+
+[![콘텐츠리움 홈페이지](docs/images/contentrium-home.svg)](https://contentrium.com/)
