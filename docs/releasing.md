@@ -8,7 +8,7 @@ The bootstrap reads `/releases/latest/download/install.ini`, validates protocol 
 
 For each app release:
 
-1. Update `src/project_manager/version.py` and `pyproject.toml`; add `docs/release-X.Y.Z.md` with the fixed installer link.
+1. Update `src/project_manager/version.py`, `pyproject.toml`, and the version in `README.md` / `docs/images/badge-release.svg`; add `docs/release-X.Y.Z.md` with the fixed installer link. Preserve the Contentrium README template structure and verify the rendered page after editing it.
 2. Commit to `main`. The Windows release workflow runs tests, builds the app, validates metadata, and exercises native installation, failure preservation, in-app update, startup, and removal with isolated data.
 3. The publisher creates draft releases before publishing. The first run creates the installer release; subsequent runs download and verify that same installer, without recompiling or editing its release. Published app versions cannot be overwritten; bump the version for a changed payload.
 4. The publisher records the previous Latest release in `publication-before.json`, then anonymously downloads the public assets, checks all payload hashes and the fixed installer/legacy alias, launches a freshly extracted portable ZIP, and runs online install/start/update/uninstall through a separately registered QA installer using the real public channel. A failure after newly publishing the app restores the previous Latest, returns the failed app release to Draft, and checks the public update entry point. Never delete releases or assets as a recovery action. A saved installer requires internet access and GitHub availability.

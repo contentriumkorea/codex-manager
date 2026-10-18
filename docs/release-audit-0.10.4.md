@@ -21,7 +21,7 @@ The shipped updater retains exact version URLs in its `Release` object between d
 
 The installer provides Start Menu registration, an optional desktop shortcut, and Windows removal. The portable app uses `%LOCALAPPDATA%/ProjectConversationManager` for Manager settings; Codex data and project files remain in their existing locations. A program ZIP alone is not a project backup. No new tray, auto-start, or system service is introduced by this distribution audit.
 
-Verification results are recorded separately after they have actually completed.
+Completed public download and local installation results are recorded in the [0.10.4 verification report](release-verification-0.10.4.md).
 
 Native portable testing exposed a taskbar registration boundary defect: Windows accepts a 255-unit relaunch command but rejects 256–259 UTF-16 units; the previous shortcut fallback started at 260 Python characters. Native regression tests reproduced the failure at 256 and 258 units, including an emoji path. The fallback now starts above 255 UTF-16 units and preserves the exact executable and settings path.
 
