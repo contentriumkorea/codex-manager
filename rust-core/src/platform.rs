@@ -26,11 +26,11 @@ pub fn command_output(command: &mut Command) -> Result<String, String> {
         .ok_or("프로세스 출력을 열 수 없습니다.")?;
     let (sender, output) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let mut s = String::new();
+        let mut bytes = Vec::new();
         let result = stdout
             .take(1024 * 1024)
-            .read_to_string(&mut s)
-            .map(|_| s)
+            .read_to_end(&mut bytes)
+            .map(|_| String::from_utf8_lossy(&bytes).into_owned())
             .map_err(|e| e.to_string());
         let _ = sender.send(result);
     });
@@ -155,4 +155,23 @@ pub fn check_version(binary: &Path) -> Result<String, String> {
         ));
     }
     Ok(version)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn successful_native_command_accepts_non_utf8_status_output() {
+        let output = command_output(Command::new("powershell.exe").args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::OpenStandardOutput().WriteByte(255)",
+        ]));
+        assert!(
+            output.is_ok(),
+            "localized native output must not fail: {output:?}"
+        );
+    }
 }

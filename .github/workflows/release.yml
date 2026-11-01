@@ -70,6 +70,8 @@ jobs:
         run: |
           rustup default 1.99.1
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+          rustup component add clippy --toolchain 1.99.1
+          if ($LASTEXITCODE -ne 0) { throw 'Rust lint component installation failed' }
           $cab = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/webview2.cab'
           $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/webview2'
           New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
