@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Codex Manager</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="main.mjs"></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <img src="app-icon.png" alt="" />
+          <div>
+            <strong>Codex Manager</strong><small>나의 작업 라이브러리</small>
+          </div>
+        </div>
+        <button id="nav-projects" class="nav active">
+          ▦ <span>모든 프로젝트</span
+          ><span id="project-count" class="badge"></span>
+        </button>
+        <button id="nav-unassigned" class="nav">
+          ▤ <span>프로젝트 미지정</span
+          ><span id="unassigned-count" class="badge"></span>
+        </button>
+        <button id="nav-history" class="nav">
+          ◷ <span>작업 내역·복구</span>
+        </button>
+        <div class="side-heading">
+          프로젝트
+          <button id="new-project" aria-label="프로젝트 만들기">＋</button>
+        </div>
+        <div
+          id="project-nav"
+          class="project-nav"
+          aria-label="프로젝트 바로가기"
+        ></div>
+        <div class="side-bottom">
+          <button id="import-side" class="nav">
+            ↙ <span>백업 가져오기</span></button
+          ><button id="settings" class="nav">⚙ <span>설정·저장소</span></button
+          ><button id="updates" class="nav">
+            ↻ <span>업데이트</span><span id="version"></span>
+          </button>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div class="header-title">
+            <div id="eyebrow">LIBRARY</div>
+            <h1 id="title">모든 프로젝트</h1>
+            <div id="subtitle">
+              프로젝트와 대화, 작업 파일을 한곳에서 관리하세요.
+            </div>
+          </div>
+          <label class="search"
+            ><span aria-hidden="true">⌕</span
+            ><input
+              id="search"
+              type="search"
+              aria-label="목록 검색"
+              placeholder="이름·폴더·대화 검색  Ctrl+F" /></label
+          ><button
+            id="refresh"
+            class="icon-button"
+            title="새로고침 (F5)"
+            aria-label="새로고침"
+          >
+            ↻
+          </button>
+        </header>
+        <div id="notice" class="notice" hidden></div>
+        <div id="update-banner" class="notice" hidden>
+          <span id="update-text"></span
+          ><button id="update-now" class="primary">업데이트</button>
+        </div>
+        <div class="toolbar">
+          <div id="tabs" class="segmented" hidden>
+            <button id="tab-threads" class="active">대화</button
+            ><button id="tab-files">파일</button>
+          </div>
+          <button id="back" hidden>← 프로젝트</button
+          ><button id="backup" class="primary">↗ 백업하기</button
+          ><button id="import">↙ 가져오기</button
+          ><span class="toolbar-spacer"></span
+          ><button id="rename" title="F2">이름 변경</button
+          ><button id="move">이동·합치기</button
+          ><button id="delete" class="danger-quiet" title="Delete">삭제</button
+          ><button id="more" aria-label="추가 작업" aria-haspopup="menu">
+            •••
+          </button>
+        </div>
+        <div id="file-path-bar" class="path-bar" hidden>
+          <button id="up" title="상위 폴더">↑</button
+          ><select id="root-picker" aria-label="연결된 폴더"></select
+          ><input id="file-path" aria-label="현재 폴더 경로" /><button
+            id="go-path"
+          >
+            이동</button
+          ><button id="mkdir">새 폴더</button>
+        </div>
+        <div class="workspace">
+          <section class="list-pane" aria-label="관리 목록">
+            <table id="table" aria-label="프로젝트 목록" tabindex="0">
+              <thead>
+                <tr id="columns"></tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+            <div id="empty" class="empty" hidden>
+              <div>▦</div>
+              <strong>표시할 항목이 없습니다.</strong>
+              <p>검색어를 바꾸거나 저장소 연결을 확인하세요.</p>
+            </div>
+          </section>
+          <aside id="details" class="details">
+            <div class="detail-icon">▦</div>
+            <h2>작업을 한곳에</h2>
+            <p>프로젝트를 두 번 클릭하면 대화와 파일을 볼 수 있습니다.</p>
+            <div class="tip">
+              Ctrl·Shift로 여러 항목 선택<br />끌어서 옮기기 · F2 이름 변경<br />Delete
+              삭제 · Ctrl+Z 되돌리기
+            </div>
+          </aside>
+        </div>
+        <section
+          id="progress"
+          class="progress-panel"
+          hidden
+          aria-label="작업 진행 상황"
+        >
+          <div class="progress-top">
+            <strong id="progress-phase">작업 준비</strong
+            ><span id="progress-percent"></span
+            ><button id="cancel">취소</button>
+          </div>
+          <progress id="progress-bar" max="100"></progress>
+          <div id="progress-path" class="progress-path"></div>
+          <div id="progress-stats"></div>
+        </section>
+        <footer>
+          <span id="status" role="status" aria-live="polite"
+            >저장소를 읽고 있습니다.</span
+          ><span id="size-status"></span>
+        </footer>
+      </main>
+    </div>
+    <dialog id="dialog">
+      <form id="dialog-form">
+        <div class="dialog-heading">
+          <h2 id="dialog-title"></h2>
+          <button id="dialog-close" type="button" aria-label="닫기">×</button>
+        </div>
+        <div id="dialog-content"></div>
+        <div id="dialog-error" role="alert" hidden></div>
+        <div class="dialog-buttons">
+          <button id="dialog-cancel" type="button">취소</button
+          ><button id="dialog-ok" type="submit" class="primary">확인</button>
+        </div>
+      </form>
+    </dialog>
+    <div id="context" class="context" role="menu" hidden></div>
+  </body>
+</html>

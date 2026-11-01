@@ -18,7 +18,7 @@ concurrency:
 jobs:
   release:
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: pwsh
@@ -50,11 +50,12 @@ jobs:
           & $codexNative.FullName --version
           if ($LASTEXITCODE -ne 0) { throw 'Codex test runtime did not start' }
           $codexNative.DirectoryName >> $env:GITHUB_PATH
+          "CODEX_TEST_BINARY=$($codexNative.FullName)" >> $env:GITHUB_ENV
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m pytest -q
+          python -m pytest tests/unit/test_updates.py tests/unit/test_release_packaging.py -q
           if ($LASTEXITCODE -ne 0) { throw 'Regression tests failed' }
       - name: Install verified Inno Setup compiler
         run: |
@@ -65,23 +66,58 @@ jobs:
           $p = Start-Process -FilePath $compilerSetup -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$compilerDir`"") -WindowStyle Hidden -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw 'Compiler installation failed' }
           "ISCC=$compilerDir\ISCC.exe" >> $env:GITHUB_ENV
+      - name: Prepare Rust and verified runtime
+        run: |
+          rustup default 1.99.1
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain installation failed' }
+          $cab = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/webview2.cab'
+          $runtimeRoot = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/webview2'
+          New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+          Invoke-WebRequest 'https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/b7919cc9-680d-4253-bf32-732988e68aa6/Microsoft.WebView2.FixedVersionRuntime.156.0.4314.58.x64.cab' -OutFile $cab
+          if ((Get-FileHash -LiteralPath $cab -Algorithm SHA256).Hash.ToLowerInvariant() -ne '857dcfd6f7035508a29645fa2978c3a6a841f220df77cc366d318894e19f4792') { throw 'Runtime checksum mismatch' }
+          & expand.exe $cab '-F:*' $runtimeRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime extraction failed' }
+          $runtime = Join-Path $runtimeRoot 'Microsoft.WebView2.FixedVersionRuntime.156.0.4314.58.x64'
+          ./tools/verify_microsoft_runtime.ps1 -Path "$runtime/msedgewebview2.exe"
+          "FIXED_RUNTIME=$runtime" >> $env:GITHUB_ENV
+          "FIXED_CAB=$cab" >> $env:GITHUB_ENV
+      - name: Native core and frontend tests
+        run: |
+          cargo test --locked --manifest-path rust-core/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Rust core tests failed' }
+          $env:CODEX_TEST_HOME = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/native-codex-integration'
+          cargo test --locked --manifest-path rust-core/Cargo.toml --lib --test appserver_smoke --test management -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw 'Native Codex integration tests failed' }
+          cargo test --locked --manifest-path rust-desktop/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'Rust desktop tests failed' }
+          cargo clippy --locked --manifest-path rust-desktop/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Rust desktop lint failed' }
+          node --test rust-desktop/tests/*.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend tests failed' }
       - name: Build application payload
         run: |
-          python -m PyInstaller --noconfirm --clean packaging/project-manager.spec
-          if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
-          python tools/build_release.py --output releases/app
-          if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed' }
+          $env:CARGO_ENCODED_RUSTFLAGS = @('-C','target-feature=+crt-static',('--remap-path-prefix='+$env:GITHUB_WORKSPACE+'=.'),('--remap-path-prefix='+$env:USERPROFILE+'=<build-user>')) -join [char]31
+          python tools/build_rust_release.py --runtime "$env:FIXED_RUNTIME" --cab "$env:FIXED_CAB" --output releases/native
+          if ($LASTEXITCODE -ne 0) { throw 'Native application build failed' }
       - name: Verify online install, failure recovery and in-app update
         run: |
-          python tools/verify_bootstrap.py --compiler "$env:ISCC" --root .test-artifacts/bootstrap --release releases/app
+          python tools/verify_bootstrap.py --compiler "$env:ISCC" --root .test-artifacts/bootstrap --release releases/native/app
           if ($LASTEXITCODE -ne 0) { throw 'Native installer verification failed' }
+      - name: Verify old frozen launcher transition
+        run: |
+          $legacy = Join-Path $env:GITHUB_WORKSPACE '.test-artifacts/legacy0104'
+          New-Item -ItemType Directory -Path $legacy -Force | Out-Null
+          gh release download v0.10.4 --repo contentriumkorea/codex-manager --pattern Codex-Manager-Windows-x64.zip --dir "$legacy"
+          if ($LASTEXITCODE -ne 0) { throw 'Published legacy payload download failed' }
+          python tools/verify_legacy_transition.py --previous "$legacy/Codex-Manager-Windows-x64.zip" --release releases/native/app --root .test-artifacts/legacy-transition
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy launcher transition failed' }
       - name: Verify portable ZIP without installation
         run: |
           python -m pytest tests/ui/test_windows_shell.py tests/ui/test_job_progress.py -q
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows regression failed' }
-          python tools/verify_portable.py --release releases/app --root .test-artifacts/portable
+          python tools/verify_portable.py --release releases/native/app --root .test-artifacts/portable
           if ($LASTEXITCODE -ne 0) { throw 'Portable verification failed' }
       - name: Publish immutable installer and versioned application
         run: |
-          python tools/publish_release.py --compiler "$env:ISCC" --release releases/app --commit "$env:GITHUB_SHA"
+          python tools/publish_release.py --compiler "$env:ISCC" --release releases/native/app --commit "$env:GITHUB_SHA"
           if ($LASTEXITCODE -ne 0) { throw 'Publication failed' }

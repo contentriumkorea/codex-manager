@@ -89,12 +89,19 @@ def verify(release, root):
         assert record['version'] == VERSION and Path(record['install_dir']).resolve() == app
         assert record['pid'] == process.pid and record['taskbar_registered'] and not record['taskbar_error']
         assert process.poll() is None
+        from PySide6.QtCore import QCoreApplication, QLockFile
+        qt = QCoreApplication.instance() or QCoreApplication([])
+        legacy_lock = QLockFile(str(state / 'application.lock'))
+        legacy_lock.setStaleLockTime(0)
+        assert not legacy_lock.tryLock(0), 'The old Qt client must refuse the active Rust instance.'
         # Only close this child process; never interact with the user's app.
         script = f'$p=Get-Process -Id {process.pid} -ErrorAction Stop; $null=$p.CloseMainWindow()'
         subprocess.run(['powershell.exe', '-NoProfile', '-Command', script], check=True,
                        capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
         process.wait(timeout=30)
         assert process.returncode == 0
+        assert legacy_lock.tryLock(0), 'The legacy lock must become available after the owned app exits.'
+        legacy_lock.unlock()
     finally:
         if process.poll() is None:
             process.terminate(); process.wait(timeout=15)

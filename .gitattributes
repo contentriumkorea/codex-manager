@@ -1,0 +1,2 @@
+# Preserve the supplied legal notice's original formatting and line endings.
+rust-desktop/ui/licenses/* -text -whitespace

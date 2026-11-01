@@ -38,7 +38,9 @@ def verify(setup,root,release):
     assert not shortcut.exists()
     root.mkdir(parents=True);app=root/'installed';state=root/'state';state.mkdir();home=root/'home';home.mkdir()
     settings={'home':str(home),'custom':'retained QA settings','startup_update_check':False};write_json(state/'settings.json',settings)
-    subprocess.run([str(setup),'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR='+str(app),'/LOG='+str(root/'install.log')],check=True,timeout=90)
+    # The fixed-runtime payload is larger than the retired application. Allow
+    # the deliberately paced loopback fixture to finish on Windows timers.
+    subprocess.run([str(setup),'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR='+str(app),'/LOG='+str(root/'install.log')],check=True,timeout=600)
     installed=registration();assert installed and installed['DisplayVersion']==VERSION and Path(installed['InstallLocation']).resolve()==app
     assert shortcut.exists() and (app/'unins000.exe').exists() and (app/'_internal').is_dir()
     quote=lambda s:"'"+str(s).replace("'","''")+"'"

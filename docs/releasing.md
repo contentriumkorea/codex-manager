@@ -28,11 +28,18 @@ Native QA: `tools/verify_bootstrap.py --compiler ISCC.exe --root .test-artifacts
 Local development and verification (use a fresh output directory for every run):
 
 ```powershell
-.venv/Scripts/python.exe -m pytest -q
-.venv/Scripts/python.exe -m PyInstaller --noconfirm --clean --distpath .test-artifacts/build-dist packaging/project-manager.spec
-.venv/Scripts/python.exe tools/build_release.py --dist .test-artifacts/build-dist/CodexManager
-.venv/Scripts/python.exe tools/verify_portable.py --release releases/v0.10.4 --root .test-artifacts/portable-0.10.4
-.venv/Scripts/python.exe tools/verify_bootstrap.py --compiler "C:/Program Files (x86)/Inno Setup 6/ISCC.exe" --release releases/v0.10.4 --root .test-artifacts/bootstrap-0.10.4
+cargo test --locked --manifest-path rust-core/Cargo.toml
+cargo test --locked --manifest-path rust-desktop/Cargo.toml
+cargo clippy --locked --manifest-path rust-desktop/Cargo.toml --all-targets -- -D warnings
+node --test rust-desktop/tests/*.test.mjs
+python tools/build_rust_release.py --cab <verified-microsoft-cab> --runtime <complete-extracted-runtime> --output .test-artifacts/native-build
+python tools/verify_portable.py --release .test-artifacts/native-build/app --root .test-artifacts/portable-new
+python tools/verify_update.py --release .test-artifacts/native-build/app --root .test-artifacts/update-new
+python tools/verify_bootstrap.py --compiler <ISCC.exe> --release .test-artifacts/native-build/app --root .test-artifacts/bootstrap-new
 ```
 
-Do not build over an installed app in `dist/CodexManager`. Keep local build outputs separate from the user's active program and state. A production bootstrap is reused from its public release; only the separately named QA installer is recompiled for validation.
+The application entry point is `rust-desktop`, with project, conversation and filesystem operations in `rust-core`. Python files remain as compatibility fixtures and release/installer validation tools; they are not packaged as the application. Do not re-enable the retired PyInstaller application build. Core and desktop Cargo versions, Tauri configuration, compatibility package version and release metadata must agree.
+
+The native build links the MSVC runtime statically. The complete fixed WebView2 runtime is obtained from the official Microsoft CAB, checked against the pinned CAB SHA-256, independently extracted and compared file-for-file before and after staging. Microsoft executable signature validation, unchanged third-party notices and the fixed-runtime license are required. The runtime is under `_internal/WebView2` so the existing uninstaller owns it. Windows 10's AppContainer read/execute rights are applied only to that runtime directory before starting the WebView. Hardware coverage limitations remain explicit in compatibility notes.
+
+The first 0.10.4-to-0.11.0 transition must separately exercise the actual old launcher: it has a 20-second helper-ready deadline. All payload files, including the runtime, are rehashed before ready. A new Rust timeout does not replace this measurement. A successful application health record requires frontend readiness and verified per-window taskbar properties.

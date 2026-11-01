@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.10.4"></a>
+  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.11.0"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-windows.svg" alt="Windows x64 지원"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-license.svg" alt="라이선스 미지정"></a>
 </p>
@@ -91,7 +91,9 @@
 - 로컬 Windows x64의 Codex 프로젝트와 대화를 관리합니다. 새 컴퓨터의 Codex 로그인은 별도로 진행합니다.
 - 프로젝트 연결 변경·가져오기·삭제는 Codex 앱을 종료한 뒤 진행하세요. 조회와 보내기는 Codex 실행 중에도 사용할 수 있습니다.
 - 프로그램 ZIP에 사용자 대화·작업 파일·Manager 설정은 포함되지 않습니다. 대화와 파일을 함께 옮길 때는 **보내기 / 가져오기**를 사용하세요.
+- 외부 작업 폴더·첨부·다른 프로젝트의 자식 대화가 포함된 백업은 추가 연결 확인이 필요하며 자동 가져오기가 제한될 수 있습니다.
 - 실제 계정의 두 번째 물리 PC 이어쓰기와 모바일 표시는 별도 검수가 필요합니다. [호환성 및 검증 범위](docs/compatibility.md)를 확인하세요.
+- 처음 실행할 때 포함 구성요소 이용약관을 확인합니다. [개인정보·구성요소 안내](docs/third-party.md)에서 Microsoft SmartScreen 및 런타임 약관을 볼 수 있습니다.
 - 이 저장소에는 별도의 오픈소스 라이선스가 지정되어 있지 않습니다.
 
 <details>
@@ -99,7 +101,7 @@
 
 파일과 대화의 이동·합치기·삭제는 격리된 테스트 저장소에서 검증합니다. 배포 과정에서는 설치·업데이트·제거, 포터블 실행, 공개 다운로드의 해시와 버전을 확인합니다.
 
-[사용 안내](docs/user-guide.md) · [호환성](docs/compatibility.md) · [개발·배포 안내](docs/releasing.md) · [0.10.4 배포 점검 범위](docs/release-audit-0.10.4.md) · [문제 신고](https://github.com/contentriumkorea/codex-manager/issues)
+[사용 안내](docs/user-guide.md) · [호환성](docs/compatibility.md) · [개발·배포 안내](docs/releasing.md) · [배포 점검 범위](docs/compatibility.md) · [문제 신고](https://github.com/contentriumkorea/codex-manager/issues)
 
 </details>
 
