@@ -326,3 +326,25 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("Codex Manager could not start");
 }
+
+#[cfg(test)]
+mod window_config_tests {
+    #[test]
+    fn runtime_version_agrees_with_embedded_release_metadata() {
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        assert_eq!(
+            context.config().version.as_deref(),
+            Some(crate::service::VERSION)
+        );
+    }
+
+    #[test]
+    fn windows_frontend_drag_drop_is_not_intercepted_by_the_native_handler() {
+        let context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        let window = &context.config().app.windows[0];
+        assert!(
+            !window.drag_drop_enabled,
+            "WebView2 native drag interception prevents the explorer's HTML5 drag and drop"
+        );
+    }
+}

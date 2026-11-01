@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.11.0"></a>
+  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.11.1"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-windows.svg" alt="Windows x64 지원"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-license.svg" alt="라이선스 미지정"></a>
 </p>

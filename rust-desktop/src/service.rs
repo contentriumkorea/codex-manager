@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub const VERSION: &str = "0.11.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Options {
     pub data: PathBuf,
     pub home: Option<PathBuf>,

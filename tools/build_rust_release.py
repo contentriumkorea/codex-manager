@@ -56,6 +56,10 @@ def stage(runtime, cab, output):
     executable = target / 'release/codex-manager.exe'
     if not executable.is_file() or not (runtime / 'msedgewebview2.exe').is_file():
         raise ValueError('Native executable or complete fixed runtime is missing.')
+    reported = subprocess.check_output([str(executable), '--version'], cwd=ROOT, timeout=15,
+                                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).decode('utf-8').strip()
+    if reported != 'Codex Manager ' + version:
+        raise ValueError('Native runtime version differs from release metadata.')
     binary = executable.read_bytes()
     if any(str(path).encode(encoding) in binary for path in (ROOT, Path(os.environ['USERPROFILE'])) for encoding in ('utf-8', 'utf-16-le')):
         raise ValueError('A private build path remains in the application binary.')
