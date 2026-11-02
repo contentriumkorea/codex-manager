@@ -62,3 +62,6 @@ pub use cross_store::{
     cross_store_conclude, cross_store_conclude_plan, cross_store_plan, cross_store_resume,
     cross_store_transfer,
 };
+
+mod portable;
+pub use portable::{portable_discover, portable_inspect, portable_snapshot, portable_status};
