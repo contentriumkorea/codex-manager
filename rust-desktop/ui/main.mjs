@@ -1,30 +1,34 @@
+import { sameHome } from "./pane-model.mjs";
 import { visibleProjects } from "./view-model.mjs";
 import {
   sortedRows,
   selectRange,
-  dropPlan,
   formatBytes,
   duration,
   safeFolderName,
   joinPath,
 } from "./explorer-model.mjs";
-const el = (id) => document.getElementById(id);
-const invoke = (name, args = {}) => window.__TAURI__.core.invoke(name, args);
+const bridge = window.parent.codexPaneBridge.register(window);
+const el = (id) => bridge.element(id) || document.getElementById(id);
+const invoke = (name, args = {}) => bridge.invoke(name, args);
 const state = {
   home: "",
+  externalBusy: false,
+  savedDestination: "",
+  navigation: 0,
+  switching: false,
+  pendingRender: false,
   catalog: { projects: [], unassigned: [], unresolved: [] },
   mode: "projects",
   project: null,
   selected: new Set(),
   anchor: null,
   sort: { key: "name", direction: "asc" },
-  clipboard: null,
   drag: null,
   directory: "",
   files: [],
   sizes: {},
   busy: false,
-  job: null,
   history: [],
   refresh: 0,
 };
@@ -92,52 +96,12 @@ function pathField(label, value = "") {
   f.box.append(row);
   return f;
 }
-function dialog(title, build, ok = "확인", danger = false) {
-  if (el("dialog").open) el("dialog").close();
-  el("dialog-title").textContent = title;
-  el("dialog-content").replaceChildren();
-  el("dialog-error").hidden = true;
-  el("dialog-ok").textContent = ok;
-  el("dialog-ok").className = danger ? "danger" : "primary";
-  el("dialog-ok").hidden = false;
-  el("dialog-cancel").textContent = "취소";
-  const collect = build(el("dialog-content"));
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      el("dialog").onclose = null;
-      el("dialog").close();
-      resolve(value);
-    };
-    el("dialog").onclose = () => finish(null);
-    el("dialog-cancel").onclick = () => finish(null);
-    el("dialog-close").onclick = () => finish(null);
-    el("dialog-form").onsubmit = async (event) => {
-      event.preventDefault();
-      el("dialog-error").hidden = true;
-      try {
-        const value = await collect();
-        finish(value ?? true);
-      } catch (error) {
-        el("dialog-error").textContent = String(error);
-        el("dialog-error").hidden = false;
-      }
-    };
-    el("dialog").showModal();
-  });
+function dialog(...args) {
+  return bridge.dialog(...args);
 }
 function showError(error) {
   setStatus(String(error).split("\n")[0]);
-  return dialog(
-    "작업을 완료하지 못했습니다.",
-    (body) => {
-      body.append(node("div", String(error), "summary-box"));
-      return () => true;
-    },
-    "닫기",
-  );
+  return bridge.showError(error);
 }
 async function confirm(title, description, danger = false) {
   return Boolean(
@@ -224,6 +188,7 @@ function historyLabel(r) {
         p.action
       ] ?? "작업"),
     "rust-transfer": "프로젝트 폴더 이동",
+    "rust-cross-store": "저장소 간 전송",
   };
   return (
     p.label ||
@@ -302,6 +267,7 @@ function render() {
   state.selected = new Set(
     [...state.selected].filter((id) => ids.includes(id)),
   );
+  publish();
   el("columns").replaceChildren();
   for (const [key, label] of columns()) {
     const th = node("th");
@@ -339,7 +305,13 @@ function render() {
     tr.tabIndex = -1;
     tr.dataset.id = row.id;
     tr.setAttribute("aria-selected", String(state.selected.has(row.id)));
-    if (state.clipboard?.cut && state.clipboard.ids.includes(row.id))
+    const clipboard = bridge.clipboard();
+    if (
+      clipboard &&
+      !clipboard.copy &&
+      sameHome(clipboard.home, state.home) &&
+      clipboard.ids.includes(row.id)
+    )
       tr.classList.add("cut");
     for (const [key] of columns()) {
       const td = node("td");
@@ -361,7 +333,24 @@ function render() {
         label.type = "button";
         label.setAttribute("aria-label", row.name);
         label.append(wrap);
-        td.append(label);
+        const selection = node("input", undefined, "row-select");
+        selection.type = "checkbox";
+        selection.checked = state.selected.has(row.id);
+        selection.setAttribute("aria-label", row.name + " 선택");
+        selection.addEventListener("click", (event) => event.stopPropagation());
+        selection.addEventListener("change", () => {
+          if (selection.checked) state.selected.add(row.id);
+          else state.selected.delete(row.id);
+          state.anchor = row.id;
+          render();
+          [...el("rows").children]
+            .find((item) => item.dataset.id === row.id)
+            ?.querySelector(".row-select")
+            ?.focus();
+        });
+        const rowCell = node("div", undefined, "row-cell");
+        rowCell.append(selection, label);
+        td.append(rowCell);
       } else td.textContent = cell(row, key);
       td.title = cell(row, key);
       tr.append(td);
@@ -390,15 +379,18 @@ function render() {
     tr.draggable = state.mode !== "history";
     tr.addEventListener("dragstart", (event) => {
       if (!state.selected.has(row.id)) state.selected = new Set([row.id]);
-      state.drag = { kind: kind(), home: state.home, ids: [...state.selected] };
-      event.dataTransfer.setData(
-        "application/x-codex-manager",
-        JSON.stringify(state.drag),
-      );
+      publish();
+      state.drag = bridge.beginDrag();
+      if (!state.drag) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer.setData("application/x-codex-manager", state.drag);
       event.dataTransfer.effectAllowed = "copyMove";
     });
     tr.addEventListener("dragend", () => {
       state.drag = null;
+      bridge.endDrag();
       document
         .querySelectorAll(".drop-target")
         .forEach((n) => n.classList.remove("drop-target"));
@@ -440,12 +432,22 @@ function render() {
   el("rename").hidden = state.mode === "history";
   el("move").hidden = state.mode === "history";
   el("delete").hidden = state.mode === "history";
-  el("rename").disabled = state.busy || !state.selected.size;
-  el("delete").disabled = state.busy || !state.selected.size;
-  el("move").disabled = state.busy || !state.selected.size;
+  el("rename").disabled =
+    state.busy || state.externalBusy || !state.selected.size;
+  el("delete").disabled =
+    state.busy || state.externalBusy || !state.selected.size;
+  el("move").disabled =
+    state.busy || state.externalBusy || !state.selected.size;
   el("backup").disabled =
-    state.busy || (state.mode === "projects" && !state.selected.size);
-  el("import").disabled = state.busy;
+    state.busy ||
+    state.externalBusy ||
+    (state.mode === "projects" && !state.selected.size);
+  el("import").disabled = state.busy || state.externalBusy;
+  el("transfer-other").disabled =
+    state.busy ||
+    state.externalBusy ||
+    !state.selected.size ||
+    state.mode === "history";
   el("project-count").textContent = state.catalog.projects.length;
   el("unassigned-count").textContent =
     state.catalog.unassigned.length + state.catalog.unresolved.length;
@@ -463,7 +465,7 @@ function render() {
             ? "프로젝트를 두 번 클릭해 대화와 파일을 열어보세요."
             : `${currentGroup()?.threads.length ?? 0}개 대화 · ${currentGroup()?.project.roots.length ?? 0}개 폴더`;
   renderDetails();
-  if (!state.busy)
+  if (!(state.busy || state.externalBusy))
     setStatus(
       `${data.length}개 항목${state.selected.size ? " · " + state.selected.size + "개 선택" : ""}`,
     );
@@ -546,7 +548,22 @@ function renderDetails() {
     info("저장소", r.payload.home ?? "");
     if (r.lastEvent?.payload?.error)
       info("확인할 내용", r.lastEvent.payload.error);
-    if (!r.recovered && r.payload.permanent !== true) {
+    if (r.payload.kind === "rust-cross-store") {
+      info("대상 저장소", r.payload.targetHome ?? "");
+      const retained = r.lastEvent?.payload?.retainedRecovery;
+      if (retained)
+        info(
+          "보관된 대화 복구 사본",
+          formatBytes(retained.bytes) + "\n" + retained.path,
+        );
+      if (r.state !== "completed")
+        body.append(button("전송 계속", () => bridge.resume(r), "primary"));
+    }
+    if (
+      r.payload.kind !== "rust-cross-store" &&
+      !r.recovered &&
+      r.payload.permanent !== true
+    ) {
       if (r.payload.kind === "rust-import" && r.state !== "completed")
         body.append(
           button("이어서 가져오기", () => resumeImport(r), "primary"),
@@ -568,7 +585,7 @@ function renderDetails() {
         ),
       );
     if (
-      r.payload.kind !== "rust-legacy" &&
+      !["rust-legacy", "rust-cross-store"].includes(r.payload.kind) &&
       !["completed", "cancelled"].includes(r.state)
     )
       body.append(
@@ -612,13 +629,18 @@ function kind() {
       : "threads";
 }
 function dropTarget(element, target) {
-  const plan = (event) =>
-    dropPlan(state.drag, target, state.home, event.ctrlKey);
+  const currentTarget = () =>
+    typeof target === "function" ? target() : target;
   element.addEventListener("dragover", (event) => {
-    if (state.busy || !plan(event)) return;
+    if (
+      state.busy ||
+      state.externalBusy ||
+      !bridge.canDrop(currentTarget(), event.ctrlKey)
+    )
+      return;
     event.preventDefault();
-    event.dataTransfer.dropEffect =
-      state.drag.kind === "files" && event.ctrlKey ? "copy" : "move";
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = event.ctrlKey ? "copy" : "move";
     element.classList.add("drop-target");
   });
   element.addEventListener("dragleave", () =>
@@ -628,9 +650,12 @@ function dropTarget(element, target) {
     event.preventDefault();
     event.stopPropagation();
     element.classList.remove("drop-target");
-    const action = plan(event);
-    state.drag = null;
-    if (action) performDrop(action).catch(showError);
+    const token = event.dataTransfer.getData("application/x-codex-manager");
+    if (state.busy || state.externalBusy) return;
+    bridge
+      .drop(token, currentTarget(), event.ctrlKey)
+      .catch(showError)
+      .finally(() => bridge.endDrag());
   });
 }
 async function performDrop(plan) {
@@ -661,7 +686,7 @@ async function performDrop(plan) {
     )
       await runJob("files", plan);
   }
-  state.clipboard = null;
+  bridge.clearClipboard();
   render();
 }
 async function activateProject(id, mode = "threads") {
@@ -684,24 +709,36 @@ async function activateProject(id, mode = "threads") {
     await navigate(roots[0]?.path ?? "");
   } else render();
 }
-async function navigate(path) {
+async function navigate(path, preserveSelection = false) {
+  const navigation = ++state.navigation,
+    home = state.home,
+    project = state.project;
   state.mode = "files";
   state.directory = path;
   el("file-path").value = path;
-  state.selected.clear();
+  if (!preserveSelection) state.selected.clear();
+  publish();
   if (!path) {
     state.files = [];
     render();
     return;
   }
+  const current = () =>
+    navigation === state.navigation &&
+    home === state.home &&
+    project === state.project &&
+    state.mode === "files";
   try {
-    state.files = await invoke("file_list", {
-      home: state.home,
-      projects: [state.project],
+    const files = await invoke("file_list", {
+      home,
+      projects: [project],
       directory: path,
     });
+    if (!current()) return;
+    state.files = files;
     render();
   } catch (error) {
+    if (!current()) return;
     state.files = [];
     render();
     await showError(error);
@@ -716,8 +753,11 @@ function openRow(row) {
     viewTranscript(row).catch(showError);
 }
 async function viewTranscript(row) {
+  const home = state.home,
+    generation = state.refresh;
   setStatus("대화 내용을 읽고 있습니다.");
-  const result = await invoke("transcript", { home: state.home, id: row.id });
+  const result = await invoke("transcript", { home, id: row.id });
+  if (home !== state.home || generation !== state.refresh) return;
   await dialog(
     titleOf(result.thread),
     (body) => {
@@ -743,10 +783,11 @@ async function viewTranscript(row) {
   );
 }
 async function refresh(withSizes = true) {
-  const generation = ++state.refresh;
+  const generation = ++state.refresh,
+    home = state.home;
   try {
-    const catalog = await invoke("catalog", { home: state.home });
-    if (generation !== state.refresh) return;
+    const catalog = await invoke("catalog", { home });
+    if (generation !== state.refresh || home !== state.home) return;
     state.catalog = catalog;
     if (state.project && !group(state.project)) {
       state.mode = "projects";
@@ -754,11 +795,12 @@ async function refresh(withSizes = true) {
     }
     renderNav();
     if (state.mode === "history") await loadHistory();
-    else if (state.mode === "files") await navigate(state.directory);
+    else if (state.mode === "files") await navigate(state.directory, true);
     else render();
-    if (withSizes) autoSizes(state.home, generation);
+    if (withSizes && generation === state.refresh && home === state.home)
+      autoSizes(home, generation);
   } catch (error) {
-    state.catalog = { projects: [], unassigned: [], unresolved: [] };
+    if (generation !== state.refresh || home !== state.home) return;
     renderNav();
     render();
     setStatus(String(error));
@@ -769,76 +811,45 @@ async function refresh(withSizes = true) {
 async function autoSizes(home, generation) {
   try {
     el("size-status").textContent = "용량 계산 중";
-    const id = await invoke("start_job", { action: "sizes", args: { home } });
-    const result = await pollJob(id, false);
+    const result = await bridge.sizes(home);
     if (generation !== state.refresh || home !== state.home) return;
     state.sizes = result;
     el("size-status").textContent = "용량 계산 완료";
-    render();
+    if (bridge.isDragging()) state.pendingRender = true;
+    else render();
   } catch (error) {
+    if (generation !== state.refresh || home !== state.home) return;
     el("size-status").textContent = String(error).split("\n")[0];
   }
 }
-async function pollJob(id, show = true, onProgress) {
+async function pollJob(id, _show = false, onProgress) {
   for (;;) {
     const p = await invoke("job_status", { id });
     if (onProgress) onProgress(p);
-    if (show) renderProgress(p);
     if (p.state === "completed") return p.result;
     if (p.state === "failed" || p.state === "cancelled")
       throw new Error(p.error || "작업을 완료하지 못했습니다.");
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
-function renderProgress(p) {
-  el("progress").hidden = false;
-  el("progress-phase").textContent = p.phase;
-  el("progress-path").textContent = p.path ?? "";
-  const percent =
-    p.total > 0 ? Math.min(99, Math.floor((p.done / p.total) * 100)) : null;
-  el("progress-percent").textContent =
-    p.state === "completed"
-      ? "완료"
-      : percent === null
-        ? "작업 중"
-        : percent + "%";
-  if (p.state === "completed") el("progress-bar").value = 100;
-  else if (percent === null) el("progress-bar").removeAttribute("value");
-  else el("progress-bar").value = percent;
-  el("progress-stats").textContent =
-    `경과 ${duration(p.elapsed)}${p.total > 0 ? " · " + (p.unit === "items" ? p.done + " / " + p.total + "개" : formatBytes(p.done) + " / " + formatBytes(p.total)) : ""}${p.speed > 0 ? " · " + formatBytes(p.speed) + "/초" : ""}${p.remaining > 0 && p.speed > 0 ? " · 약 " + duration(p.remaining) + " 남음" : ""}`;
-  el("cancel").disabled = p.state !== "running";
-}
 async function runJob(action, args, onProgress) {
-  if (state.busy) throw new Error("진행 중인 작업이 있습니다.");
+  if (state.busy || state.externalBusy || state.switching)
+    throw new Error("진행 중인 작업이 있습니다.");
   state.busy = true;
-  state.job = null;
-  el("cancel").textContent = "취소";
   render();
   try {
-    const id = await invoke("start_job", {
+    const result = await bridge.runVisible(
       action,
-      args: {
-        ...args,
-        home: state.home,
-        expectedRevision: state.catalog.revision,
-      },
-    });
-    state.job = id;
-    const result = await pollJob(id, true, onProgress);
-    state.busy = false;
-    state.job = null;
+      { ...args, home: state.home, expectedRevision: state.catalog.revision },
+      onProgress,
+    );
     setStatus("작업을 완료했습니다.");
-    await refresh(false);
     return result;
   } catch (error) {
-    state.busy = false;
-    state.job = null;
-    el("progress-phase").textContent = "작업 결과 확인";
     setStatus(String(error));
-    await refresh(false);
     throw error;
   } finally {
+    state.busy = false;
     render();
   }
 }
@@ -1073,7 +1084,7 @@ async function moveDialog() {
       if (projectMode && chosen.length === 1)
         body.append(
           button("다른 폴더로 프로젝트 이동", async () => {
-            el("dialog").close();
+            bridge.closeDialog();
             await transferDialog(chosen[0]);
           }),
         );
@@ -1296,7 +1307,16 @@ async function importDialog() {
   }
 }
 async function loadHistory() {
-  state.history = await invoke("history");
+  const home = state.home,
+    generation = state.refresh;
+  const history = await invoke("history");
+  if (
+    home !== state.home ||
+    generation !== state.refresh ||
+    state.mode !== "history"
+  )
+    return;
+  state.history = history;
   render();
 }
 async function undo(id = null) {
@@ -1347,58 +1367,18 @@ async function resumeImport(record) {
   });
 }
 async function copy(cut = false) {
-  const selected = selectedRows();
-  if (!selected.length) return;
-  if (state.mode === "history") return;
-  state.clipboard = {
-    home: state.home,
-    kind: kind(),
-    ids: selected.map((r) => r.id),
-    cut,
-  };
-  if (!cut && state.mode !== "files") {
-    const text = selected.map((r) => r.name).join("\n");
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {}
-    state.clipboard = null;
-  }
+  if (!selectedRows().length || state.mode === "history") return;
+  publish();
+  bridge.copy(cut);
   setStatus(
-    cut ? "잘라내기 준비 · 대상에서 Ctrl+V · Esc 취소" : "복사했습니다.",
+    cut
+      ? "잘라내기 준비 · 대상에서 Ctrl+V · Esc 취소"
+      : "복사 준비 · 대상에서 Ctrl+V",
   );
   render();
 }
 async function paste() {
-  const clip = state.clipboard;
-  if (!clip) return;
-  if (clip.home !== state.home)
-    throw new Error("원래 저장소에서 다시 선택하세요.");
-  if (clip.kind === "files") {
-    const destination =
-      state.mode === "files"
-        ? state.directory
-        : (currentGroup()?.project.roots[0]?.path ??
-          selectedRows()[0]?.project?.roots[0]?.path);
-    if (!destination)
-      throw new Error("대상 프로젝트의 파일 폴더를 열어 주세요.");
-    await performDrop({
-      action: "files",
-      kind: clip.cut ? "move" : "copy",
-      sources: clip.ids,
-      destination,
-    });
-  } else {
-    let target = state.project;
-    if (state.mode === "projects" && selectedRows().length === 1)
-      target = selectedRows()[0].id;
-    if (!target || clip.ids.includes(target))
-      throw new Error("옮길 대상 프로젝트를 선택하세요.");
-    await performDrop({
-      action: clip.kind === "projects" ? "merge" : "move_threads",
-      ids: clip.ids,
-      target,
-    });
-  }
+  return bridge.paste();
 }
 function context(x, y) {
   const menu = el("context");
@@ -1420,6 +1400,8 @@ function context(x, y) {
     item("복사", "Ctrl+C", () => copy());
     item("붙여넣기", "Ctrl+V", paste);
     item("이동·합치기", "", moveDialog);
+    item("반대편으로 이동", "", () => bridge.transferOther(false));
+    item("반대편으로 복사", "", () => bridge.transferOther(true));
     if (state.mode === "projects") item("백업하기", "", backup);
     item("삭제", "Delete", () => deleteItems());
     if (state.mode !== "files")
@@ -1528,15 +1510,10 @@ async function settingsDialog() {
       args: answer,
     });
     await pollJob(preference, false);
-    await invoke("select_home", { home: answer.home });
-    state.home = answer.home;
-    state.mode = "projects";
-    state.project = null;
-    state.clipboard = null;
-    await refresh();
+    await switchHome(answer.home);
   }
 }
-el("refresh").addEventListener("click", () => refresh());
+el("refresh").addEventListener("click", () => refresh().catch(showError));
 el("search").addEventListener("input", render);
 el("new-project").addEventListener("click", () =>
   newProject().catch(showError),
@@ -1595,32 +1572,20 @@ for (const [id, callback] of [
   ["settings", settingsDialog],
 ])
   el(id).addEventListener("click", () => callback().catch(showError));
-el("updates").addEventListener("click", () => updateDialog().catch(showError));
+
 el("mkdir").addEventListener("click", () => mkdir().catch(showError));
 el("more").addEventListener("click", () => {
   const rect = el("more").getBoundingClientRect();
   context(rect.right - 190, rect.bottom + 5);
 });
-el("cancel").addEventListener("click", () => {
-  if (state.job) {
-    invoke("cancel_job", { id: state.job }).catch(showError);
-    el("cancel").disabled = true;
-    el("cancel").textContent = "취소 중";
-  }
-});
 document.addEventListener("click", (event) => {
   if (!el("context").contains(event.target) && event.target !== el("more"))
     el("context").hidden = true;
 });
-document.addEventListener("keydown", (event) => {
+function handleKey(event) {
+  if (!bridge.isActive()) return;
   if (event.isComposing) return;
-  if (el("dialog").open) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
-    event.preventDefault();
-    el("search").focus();
-    el("search").select();
-    return;
-  }
+  if (bridge.dialogOpen()) return;
   const typing =
     event.target instanceof HTMLInputElement ||
     event.target instanceof HTMLTextAreaElement ||
@@ -1665,7 +1630,7 @@ document.addEventListener("keydown", (event) => {
     };
   else if (event.key === "Escape")
     action = () => {
-      state.clipboard = null;
+      bridge.clearClipboard();
       state.selected.clear();
       el("context").hidden = true;
       render();
@@ -1698,33 +1663,196 @@ document.addEventListener("keydown", (event) => {
   }
   if (action) {
     event.preventDefault();
-    if (!state.busy || event.key === "Escape")
+    if ((!state.busy && !state.externalBusy) || event.key === "Escape")
       Promise.resolve(action()).catch(showError);
   }
-});
+}
+document.addEventListener("keydown", handleKey);
+function publish() {
+  const selected = selectedRows();
+  const targetProject = ["threads", "files"].includes(state.mode)
+    ? state.project
+    : state.mode === "projects" && selected.length === 1
+      ? selected[0].id
+      : null;
+  const target = group(targetProject);
+  bridge.publish({
+    home: state.home,
+    mode: state.mode,
+    project: state.project,
+    directory: state.directory,
+    sort: state.sort,
+    ids: [...state.selected],
+    names: selected.map((row) => row.name),
+    search: el("search").value,
+    revision: state.catalog.revision,
+    targetProject,
+    destination:
+      state.mode === "files"
+        ? state.directory
+        : target?.project.roots[0]?.path || "",
+    savedDestination: state.savedDestination,
+    projects: state.catalog.projects.map((g) => ({
+      id: g.project.id,
+      name: g.project.name,
+    })),
+  });
+}
+function fillStores(boot) {
+  const picker = el("store-picker");
+  picker.replaceChildren();
+  const stores = [...(boot.stores ?? [])];
+  if (!stores.some((s) => sameHome(s.home, state.home)))
+    stores.push({ home: state.home, available: true });
+  for (const store of stores) {
+    const option = node(
+      "option",
+      (store.available ? "" : "연결 확인 필요 · ") + store.home,
+    );
+    option.value = store.home;
+    option.selected = sameHome(store.home, state.home);
+    picker.append(option);
+  }
+  picker.title = state.home;
+}
+async function reloadStores() {
+  const boot = await invoke("bootstrap");
+  fillStores(boot);
+}
+async function switchHome(home) {
+  if (state.switching || state.busy || state.externalBusy)
+    throw new Error("진행 중인 작업을 마무리하세요.");
+  state.switching = true;
+  ++state.refresh;
+  ++state.navigation;
+  el("store-picker").disabled = true;
+  el("connect-store").disabled = true;
+  try {
+    await invoke("select_home", { home });
+    state.home = home;
+    state.catalog = { projects: [], unassigned: [], unresolved: [] };
+    state.mode = "projects";
+    state.project = null;
+    state.directory = "";
+    state.files = [];
+    state.selected.clear();
+    state.anchor = null;
+    state.sizes = {};
+    el("search").value = "";
+    state.sort = { key: "name", direction: "asc" };
+    el("notice").hidden = true;
+    renderNav();
+    render();
+    const boot = await invoke("bootstrap");
+    state.savedDestination =
+      boot.settings.panes?.[bridge.pane]?.destination || "";
+    state.sizes = boot.sizes ?? {};
+    fillStores(boot);
+    publish();
+    await refresh();
+    await bridge.storesChanged();
+  } finally {
+    state.switching = false;
+    el("store-picker").disabled = false;
+    el("connect-store").disabled = false;
+    el("store-picker").value = state.home;
+  }
+}
+async function connectStore() {
+  const answer = await dialog(
+    "Codex 저장소 연결",
+    (body) => {
+      const path = pathField("Codex 저장소 경로", state.home);
+      body.append(path.box);
+      return () => path.input.value.trim();
+    },
+    "연결",
+  );
+  if (answer) await switchHome(answer);
+}
+el("store-picker").addEventListener("change", () =>
+  switchHome(el("store-picker").value).catch(showError),
+);
+el("connect-store").addEventListener("click", () =>
+  connectStore().catch(showError),
+);
+el("transfer-other").addEventListener("click", () =>
+  bridge.transferOther(false).catch(showError),
+);
+for (const event of ["pointerdown", "focusin"])
+  document.addEventListener(event, () => bridge.activate(), true);
+dropTarget(document.querySelector(".list-pane"), () =>
+  state.mode === "projects"
+    ? { projectId: null, directory: state.savedDestination }
+    : {
+        projectId: state.project,
+        directory:
+          state.mode === "files"
+            ? state.directory
+            : currentGroup()?.project.roots[0]?.path,
+      },
+);
 async function start() {
   try {
-    if (!window.__TAURI__?.core) throw new Error("데스크톱 앱에서 실행하세요.");
     const boot = await invoke("bootstrap");
     state.home = boot.home;
     state.sizes = boot.sizes ?? {};
-    el("version").textContent = boot.version;
+    state.savedDestination =
+      boot.settings.panes?.[bridge.pane]?.destination || "";
+    const label = bridge.pane === "left" ? "왼쪽 저장소" : "오른쪽 저장소";
+    el("pane-label").textContent = label;
+    el("store-picker").setAttribute("aria-label", label);
+    el("connect-store").setAttribute("aria-label", label + " 연결");
+    fillStores(boot);
     el("notice").hidden = !boot.testMode;
     if (boot.testMode)
       el("notice").textContent = "격리 저장소를 사용하는 개발 검증 화면입니다.";
     await refresh();
-    await invoke("ready");
-    window.__TAURI__.event.listen("close-blocked", (event) =>
-      showError(event.payload),
+    bridge.ready(
+      {
+        refresh,
+        render,
+        reloadStores,
+        performDrop,
+        key: handleKey,
+        setBusy: (value) => {
+          state.externalBusy = value;
+          el("store-picker").disabled = value;
+          el("connect-store").disabled = value;
+          render();
+        },
+        setDestination: (value) => {
+          state.savedDestination = value;
+        },
+        dragEnded: () => {
+          state.drag = null;
+          document
+            .querySelectorAll(".drop-target")
+            .forEach((n) => n.classList.remove("drop-target"));
+          if (state.pendingRender) {
+            state.pendingRender = false;
+            render();
+          }
+        },
+        action: async (action) => {
+          if (action === "settings") await settingsDialog();
+          else if (action === "updates") await updateDialog();
+          else if (action === "import") await importDialog();
+          else if (action === "history") el("nav-history").click();
+        },
+        startGlobals: async (boot) => {
+          if (!boot.testMode && boot.settings.webview2_terms !== "2026-11-02")
+            await runtimeTerms(true);
+          if (
+            !boot.noUpdate &&
+            !boot.testMode &&
+            boot.settings.startup_update_check !== false
+          )
+            checkUpdates(false).catch(() => {});
+        },
+      },
+      boot,
     );
-    if (!boot.testMode && boot.settings.webview2_terms !== "2026-11-02")
-      await runtimeTerms(true);
-    if (
-      !boot.noUpdate &&
-      !boot.testMode &&
-      boot.settings.startup_update_check !== false
-    )
-      checkUpdates(false).catch(() => {});
   } catch (error) {
     setStatus(String(error));
     el("notice").hidden = false;
@@ -1822,7 +1950,7 @@ async function updateDialog() {
     updateReady ? "지금 업데이트" : "다운로드·업데이트",
   );
   if (!yes) return;
-  if (state.busy)
+  if (state.busy || state.externalBusy)
     throw new Error("진행 중인 파일 관리 작업이 끝난 뒤 업데이트하세요.");
   if (!updateReady) {
     try {

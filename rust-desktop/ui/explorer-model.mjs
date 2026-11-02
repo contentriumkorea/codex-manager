@@ -1,3 +1,4 @@
+import { sameHome } from "./pane-model.mjs";
 const collator = new Intl.Collator("ko-KR", {
   numeric: true,
   sensitivity: "base",
@@ -39,7 +40,8 @@ export function selectRange(
   return selected;
 }
 export function dropPlan(payload, target, home, copy = false) {
-  if (!payload || payload.home !== home || !payload.ids?.length) return null;
+  if (!payload || !sameHome(payload.home, home) || !payload.ids?.length)
+    return null;
   if (payload.kind === "projects") {
     if (!target.projectId || payload.ids.includes(target.projectId))
       return null;
