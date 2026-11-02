@@ -1,4 +1,6 @@
-//! Folder-local verified conversation snapshots. Ordinary workspace files are never copied.
+//! Folder-local verified snapshots. Ordinary files already in the anchor are never copied.
+#[path = "portable_workspace.rs"]
+mod workspace;
 use crate::{
     absolute, all_threads, digest, ensure_plain, map_workspace, roots, Catalog, Job, RolloutReader,
 };
@@ -44,6 +46,9 @@ fn read_json(path: &Path) -> Result<Value, String> {
     serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > 32 * 1024 * 1024 {
+        return Err("Portable metadata exceeds 32 MiB; not published".into());
+    }
     ensure_plain(path)?;
     let mut f = OpenOptions::new()
         .write(true)
@@ -92,7 +97,7 @@ fn atomic_json(dir: &Path, name: &str, value: &Value) -> Result<(), String> {
     }
     result
 }
-// Retained for the complete call, including publication and collection. Never auto-break stale locks.
+// OS-held exclusive lock covers publication and collection; process exit releases it automatically.
 struct Lock {
     _file: File,
 }
@@ -135,7 +140,7 @@ fn mapped(anchor: &Path, original: &str, path: &str) -> Result<PathBuf, String> 
         Path::new(path),
         &[(PathBuf::from(original), anchor.to_owned())],
     )?;
-    if p.starts_with(anchor.join(".codex-manager")) {
+    if map_workspace(&p, &[(anchor.join(".codex-manager"), anchor.to_owned())]).is_ok() {
         return Err("Sidecar cannot be a working root".into());
     }
     absolute(&p)?;
@@ -145,6 +150,12 @@ fn mapped(anchor: &Path, original: &str, path: &str) -> Result<PathBuf, String> 
 /// Cheap metadata status; this does not certify current blob integrity. Use inspect before restore.
 pub fn portable_status(anchor: &Path, namespace: &str) -> Result<Value, String> {
     let dir = directory(anchor, namespace)?;
+    if !dir.join("current.json").exists() {
+        let attempt = read_json(&dir.join("status.json"))?;
+        return Ok(
+            json!({"namespace":namespace,"anchor":anchor,"snapshotId":null,"lastSuccessfulSave":null,"complete":false,"integrityVerified":false,"project":attempt["project"],"lastAttempt":attempt}),
+        );
+    }
     let (p, m) = current(&dir)?;
     Ok(
         json!({"namespace":namespace,"anchor":anchor,"snapshotId":p["snapshotId"],"lastSuccessfulSave":m["createdAt"],"project":m["project"],"conversationCount":m["conversations"].as_array().map(Vec::len),"complete":true,"integrityVerified":false,"lastAttempt":if dir.join("status.json").exists(){read_json(&dir.join("status.json"))?}else{Value::Null}}),
@@ -158,11 +169,16 @@ pub fn portable_inspect(anchor: &Path, namespace: &str, job: &Job) -> Result<Val
     if m["namespace"] != namespace {
         return Err("Portable namespace mismatch".into());
     }
-    let original = string(&m, "originalAnchor")?;
+    workspace_links(anchor, job)?;
+    workspace::verify(anchor, &dir, &m, job)?;
     let mut ids = HashSet::new();
     for r in m["roots"].as_array().ok_or("Missing portable roots")? {
-        let path = mapped(anchor, original, r.as_str().ok_or("Invalid root")?)?;
-        if !path.is_dir() {
+        let original = r.as_str().ok_or("Invalid root")?;
+        let path = workspace::map(anchor, &m, original)?;
+        let external = m["externalRoots"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|r| r["original"] == original));
+        if !external && !path.is_dir() {
             return Err(format!(
                 "Portable working folder missing: {}",
                 path.display()
@@ -186,12 +202,12 @@ pub fn portable_inspect(anchor: &Path, namespace: &str, job: &Job) -> Result<Val
         if !ids.insert(id) {
             return Err("Duplicate portable thread UUID".into());
         }
-        mapped(anchor, original, string(t, "cwd")?)?;
+        workspace::map(anchor, &m, string(t, "cwd")?)?;
         for r in t["runtimeRoots"]
             .as_array()
             .ok_or("Missing runtime roots")?
         {
-            mapped(anchor, original, r.as_str().ok_or("Invalid runtime root")?)?;
+            workspace::map(anchor, &m, r.as_str().ok_or("Invalid runtime root")?)?;
         }
         let key = hash_key(string(t, "sha256")?)?;
         let blob = dir.join("blobs").join(key);
@@ -293,12 +309,21 @@ fn scan_record(
             match v {
                 Value::Object(o) => {
                     for (k, v) in o {
-                        if ["path", "image_path", "file_path"].contains(&k.as_str())
+                        if [
+                            "path",
+                            "image_path",
+                            "file_path",
+                            "file_id",
+                            "attachment_id",
+                        ]
+                        .contains(&k.as_str())
                             && v.is_string()
                         {
                             dependencies.push(json!({"kind":"attachment","threadId":id,"path":v,"resolved":false}));
                         } else if k == "image_url"
-                            && v.as_str().is_some_and(|s| !s.starts_with("data:"))
+                            && v.as_str()
+                                .or_else(|| v["url"].as_str())
+                                .is_some_and(|s| !s.starts_with("data:"))
                         {
                             dependencies.push(json!({"kind":"attachment","threadId":id,"path":v,"resolved":false}));
                         } else {
@@ -327,7 +352,9 @@ fn workspace_links(anchor: &Path, job: &Job) -> Result<(), String> {
         for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
             job.check()?;
             let p = entry.map_err(|e| e.to_string())?.path();
-            if p.file_name().is_some_and(|n| n == ".codex-manager") {
+            if p.file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(".codex-manager"))
+            {
                 continue;
             }
             ensure_plain(&p).map_err(|e| {
@@ -344,12 +371,27 @@ fn workspace_links(anchor: &Path, job: &Job) -> Result<(), String> {
     Ok(())
 }
 
-/// Snapshot all project threads and internal descendants; no normal files or global state are copied.
+/// Snapshot all project threads and internal descendants; anchor files and global state are not copied.
 /// Errors preserve current.json and are durably recorded in status.json when the sidecar is writable.
 pub fn portable_snapshot(
     catalog: &Catalog,
     project_id: &str,
     anchor: &Path,
+    job: &Job,
+) -> Result<Value, String> {
+    portable_snapshot_namespace(
+        catalog,
+        project_id,
+        anchor,
+        &hash(project_id.as_bytes()),
+        job,
+    )
+}
+fn portable_snapshot_namespace(
+    catalog: &Catalog,
+    project_id: &str,
+    anchor: &Path,
+    namespace: &str,
     job: &Job,
 ) -> Result<Value, String> {
     absolute(anchor)?;
@@ -361,13 +403,23 @@ pub fn portable_snapshot(
         .iter()
         .find(|g| g.project["id"] == project_id)
         .ok_or("Project not found")?;
-    let namespace = hash(project_id.as_bytes());
-    let dir = directory(anchor, &namespace)?;
+    hash_key(namespace)?;
+    let dir = directory(anchor, namespace)?;
     fs::create_dir_all(dir.join("manifests")).map_err(|e| e.to_string())?;
     fs::create_dir_all(dir.join("blobs")).map_err(|e| e.to_string())?;
     let ignore = anchor.join(".codex-manager/.gitignore");
+    ensure_plain(&ignore)?;
     if !ignore.exists() {
         write_new(&ignore, b"*\n")?;
+    } else if fs::read_to_string(&ignore)
+        .map_err(|e| e.to_string())?
+        .trim()
+        != "*"
+    {
+        return Err(
+            "Existing sidecar .gitignore does not protect private snapshots; original preserved"
+                .into(),
+        );
     }
     let _lock = lock(&dir)?;
     let result = (|| {
@@ -386,20 +438,9 @@ pub fn portable_snapshot(
             None
         };
         let mut dependencies = vec![];
-        for r in &project_roots {
-            if mapped(anchor, &anchor.to_string_lossy(), &r.to_string_lossy()).is_err() {
-                dependencies.push(json!({"kind":"external_root","path":r,"resolved":false}));
-            }
-            if r.join(".git").is_file() {
-                dependencies.push(json!({"kind":"linked_worktree","path":r,"resolved":false}));
-            }
-        }
-        if !dependencies.is_empty() {
-            return Err(format!(
-                "Unresolved portable dependencies: {}",
-                json!(dependencies)
-            ));
-        }
+        let external_roots = workspace::capture(anchor, &dir, &project_roots, job)?;
+        let location =
+            json!({"namespace":namespace,"originalAnchor":anchor,"externalRoots":external_roots});
         let all = all_threads(catalog);
         let mut ids: HashSet<String> = group
             .threads
@@ -448,12 +489,27 @@ pub fn portable_snapshot(
             {
                 dependencies.push(json!({"kind":"missing_parent","threadId":id,"parentId":t["parentThreadId"],"resolved":false}));
             }
-            let source = crate::resolve_rollout_path(Path::new(string(t, "path")?))?;
-            if source.starts_with(anchor.join(".codex-manager")) {
+            let context = |error: String| {
+                format!(
+                    "Thread [{}] ({id}) at {}: {error}",
+                    t["name"]
+                        .as_str()
+                        .or_else(|| t["title"].as_str())
+                        .unwrap_or("Untitled"),
+                    t["path"].as_str().unwrap_or("unknown path")
+                )
+            };
+            let source =
+                crate::resolve_rollout_path(Path::new(string(t, "path")?)).map_err(&context)?;
+            if map_workspace(
+                &source,
+                &[(anchor.join(".codex-manager"), anchor.to_owned())],
+            )
+            .is_ok()
+            {
                 return Err("Sidecar recursion rejected".into());
             }
-            let (sha, ident, size) =
-                live_hash(&source, job, None).map_err(|e| format!("Thread {id}: {e}"))?;
+            let (sha, ident, size) = live_hash(&source, job, None).map_err(&context)?;
             let blob = dir.join("blobs").join(&sha);
             let cached = previous
                 .as_ref()
@@ -476,19 +532,17 @@ pub fn portable_snapshot(
                     string(c, "decodedSha256")?.to_owned(),
                 )
             } else {
-                let mut reader = RolloutReader::open_live(&source, Some(id), job)?;
+                let mut reader =
+                    RolloutReader::open_live(&source, Some(id), job).map_err(&context)?;
                 if reader.raw_sha256() != sha || reader.raw_identity() != ident {
                     return Err("Source changed before verification".into());
                 }
                 let mut runtime = vec![];
                 let mut deps = vec![];
                 let mut decoded = Sha256::new();
-                while let Some(r) = reader
-                    .next_record()
-                    .map_err(|e| format!("Thread {id}: {e}"))?
-                {
+                while let Some(r) = reader.next_record().map_err(&context)? {
                     decoded.update(r.line.as_bytes());
-                    scan_record(&r.value, &mut deps, id, &mut runtime)?;
+                    scan_record(&r.value, &mut deps, id, &mut runtime).map_err(&context)?;
                 }
                 if blob.exists() {
                     if digest(&blob, job)? != sha {
@@ -523,12 +577,12 @@ pub fn portable_snapshot(
                 (runtime, deps, format!("{:x}", decoded.finalize()))
             };
             let cwd = string(t, "cwd")?;
-            if mapped(anchor, &anchor.to_string_lossy(), cwd).is_err() {
+            if workspace::map(anchor, &location, cwd).is_err() {
                 deps.push(json!({"kind":"external_cwd","threadId":id,"path":cwd,"resolved":false}));
             }
             for r in &mut runtime {
                 if r.as_str()
-                    .is_none_or(|p| mapped(anchor, &anchor.to_string_lossy(), p).is_err())
+                    .is_none_or(|p| workspace::map(anchor, &location, p).is_err())
                 {
                     deps.push(
                         json!({"kind":"external_runtime","threadId":id,"path":r,"resolved":false}),
@@ -544,7 +598,7 @@ pub fn portable_snapshot(
                 json!(dependencies)
             ));
         }
-        let manifest = json!({"schema":1,"namespace":namespace,"createdAt":chrono::Utc::now().to_rfc3339(),"complete":true,"project":{"id":project_id,"name":group.project["name"]},"originalAnchor":anchor,"roots":project_roots,"conversations":records,"dependencies":[]});
+        let manifest = json!({"schema":1,"namespace":namespace,"createdAt":chrono::Utc::now().to_rfc3339(),"complete":true,"project":{"id":project_id,"name":group.project["name"]},"originalAnchor":anchor,"roots":project_roots,"externalRoots":external_roots,"conversations":records,"dependencies":[]});
         let bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
         let sid = hash(&bytes);
         let file = dir.join("manifests").join(format!("{sid}.json"));
@@ -560,9 +614,11 @@ pub fn portable_snapshot(
     })();
     let status = match &result {
         Ok(v) => {
-            json!({"state":"saved","at":chrono::Utc::now().to_rfc3339(),"snapshotId":v["snapshotId"]})
+            json!({"state":"saved","at":chrono::Utc::now().to_rfc3339(),"snapshotId":v["snapshotId"],"retentionWarning":v["retentionWarning"],"project":{"id":project_id,"name":group.project["name"]}})
         }
-        Err(e) => json!({"state":"failed","at":chrono::Utc::now().to_rfc3339(),"error":e}),
+        Err(e) => {
+            json!({"state":"failed","at":chrono::Utc::now().to_rfc3339(),"error":e,"project":{"id":project_id,"name":group.project["name"]}})
+        }
     };
     let _ = atomic_json(&dir, "status.json", &status);
     result
@@ -573,12 +629,14 @@ fn collect(dir: &Path, pointer: &Value, job: &Job) -> Result<(), String> {
         .flatten()
         .collect();
     let mut blobs = HashSet::new();
+    let mut retained_manifests = vec![];
     for id in &keep {
         hash_key(id)?;
         let m = read_json(&dir.join("manifests").join(format!("{id}.json")))?;
         if hash(&serde_json::to_vec(&m).map_err(|e| e.to_string())?) != *id {
             return Err("Retained manifest changed; collection blocked".into());
         }
+        retained_manifests.push(m.clone());
         for t in m["conversations"]
             .as_array()
             .ok_or("Invalid retained conversations")?
@@ -612,6 +670,7 @@ fn collect(dir: &Path, pointer: &Value, job: &Job) -> Result<(), String> {
             fs::remove_file(p).map_err(|e| e.to_string())?;
         }
     }
+    workspace::collect(dir, &retained_manifests, job)?;
     Ok(())
 }
 /// Bounded metadata-only discovery. Diagnostics are explicit; inspect verifies selected snapshots.
@@ -697,13 +756,12 @@ pub fn portable_discover(
 use crate::{Adapter, ThreadImport};
 use std::collections::HashMap;
 fn mapped_thread(anchor: &Path, m: &Value, t: &Value) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let original = string(m, "originalAnchor")?;
-    let cwd = mapped(anchor, original, string(t, "cwd")?)?;
+    let cwd = workspace::map(anchor, &m, string(t, "cwd")?)?;
     let runtime = t["runtimeRoots"]
         .as_array()
         .ok_or("Missing runtime roots")?
         .iter()
-        .map(|r| mapped(anchor, original, r.as_str().ok_or("Invalid runtime root")?))
+        .map(|r| workspace::map(anchor, m, r.as_str().ok_or("Invalid runtime root")?))
         .collect::<Result<Vec<_>, String>>()?;
     Ok((cwd, runtime))
 }
@@ -759,7 +817,75 @@ impl Adapter {
         {
             return Err("Portable anchor overlaps protected Codex/Manager storage".into());
         }
-        portable_snapshot(&self.snapshot()?, project_id, anchor, job)
+        let catalog = self.snapshot()?;
+        let project = &catalog
+            .projects
+            .iter()
+            .find(|g| g.project["id"] == project_id)
+            .ok_or("Project not found")?
+            .project;
+        if roots(project)?.iter().any(|r| {
+            self.protected_storage()
+                .iter()
+                .any(|p| crate::paths_overlap(r, p))
+        }) {
+            return Err("Connected root overlaps protected Codex/Manager storage".into());
+        }
+        let namespace = self.portable_namespace(project_id, anchor)?;
+        portable_snapshot_namespace(&catalog, project_id, anchor, &namespace, job)
+    }
+    /// Trusted portable lineage for UI status and subsequent saves. Explicit merges keep the target's own namespace.
+    pub fn portable_namespace(&self, project_id: &str, anchor: &Path) -> Result<String, String> {
+        absolute(anchor)?;
+        let catalog = self.snapshot()?;
+        let project = &catalog
+            .projects
+            .iter()
+            .find(|g| g.project["id"] == project_id)
+            .ok_or("Project not found for portable lineage")?
+            .project;
+        if !roots(project)?
+            .iter()
+            .any(|r| crate::clean_path(r) == crate::clean_path(anchor))
+        {
+            return Err("Portable lineage anchor is not a current project root".into());
+        }
+        let mut candidates = HashMap::new();
+        for op in self
+            .journal
+            .operations_for("rust-portable-restore", &self.store.home)?
+        {
+            let p = &op["payload"];
+            if p["kind"] != "rust-portable-restore"
+                || op["state"] != "completed"
+                || p["home"] != json!(self.store.home)
+                || !p["target"].is_null()
+            {
+                continue;
+            }
+            let events = self.journal.events(string(&op, "id")?)?;
+            if events
+                .iter()
+                .any(|e| e["phase"] == "completed" && e["payload"]["projectId"] == project_id)
+            {
+                candidates.insert(
+                    hash_key(string(p, "namespace")?)?.to_owned(),
+                    p["sourceProjectId"].clone(),
+                );
+            }
+        }
+        if candidates.len() > 1 {
+            return Err("Multiple restored portable lineages claim this project; explicit resolution is required".into());
+        }
+        if let Some((namespace, source_id)) = candidates.into_iter().next() {
+            let dir = directory(anchor, &namespace)?;
+            let (_, m) = current(&dir)?;
+            if m["project"]["id"] != project_id && m["project"]["id"] != source_id {
+                return Err("Portable lineage now belongs to a different project; automatic overwrite blocked".into());
+            }
+            return Ok(namespace);
+        }
+        Ok(hash(project_id.as_bytes()))
     }
     /// Read-only conflict preview. An existing UUID is skipped only with full-content and metadata proof.
     pub fn portable_restore_plan(
@@ -794,8 +920,17 @@ impl Adapter {
             }
         }
         let existing = all_threads(&catalog);
-        let history = self.journal.history()?;
-        let mut conflicts = vec![];
+        let history = self
+            .journal
+            .operations_for("rust-portable-restore", &self.store.home)?;
+        let mut conflicts = workspace::conflicts(
+            self,
+            anchor,
+            &directory(anchor, string(m, "namespace")?)?,
+            m,
+            resume,
+            job,
+        )?;
         let mut skipped = vec![];
         let mut importing = vec![];
         for t in m["conversations"]
@@ -841,13 +976,7 @@ impl Adapter {
             .as_array()
             .ok_or("Missing roots")?
             .iter()
-            .map(|r| {
-                mapped(
-                    anchor,
-                    string(m, "originalAnchor")?,
-                    r.as_str().ok_or("Invalid root")?,
-                )
-            })
+            .map(|r| workspace::map(anchor, m, r.as_str().ok_or("Invalid root")?))
             .collect::<Result<Vec<_>, String>>()?;
         Ok(
             json!({"namespace":m["namespace"],"snapshotId":m["snapshotId"],"anchor":anchor,"project":m["project"],"roots":destinations,"conversationCount":m["conversations"].as_array().unwrap().len(),"targetProjectId":target,"conflicts":conflicts,"skipped":skipped,"importing":importing,"canRestore":conflicts.is_empty()}),
@@ -908,7 +1037,7 @@ impl Adapter {
         let op = if let Some(id) = resume {
             id.to_owned()
         } else {
-            self.begin(json!({"kind":"rust-portable-restore","namespace":namespace,"snapshotId":m["snapshotId"],"anchor":anchor,"target":target,"targetBefore":target_before,"skipped":plan["skipped"],"projectKey":uuid::Uuid::new_v4().to_string(),"resources":[format!("portable:{}:{namespace}",anchor.display())]}))?
+            self.begin(json!({"kind":"rust-portable-restore","namespace":namespace,"sourceProjectId":m["project"]["id"],"snapshotId":m["snapshotId"],"anchor":anchor,"target":target,"targetBefore":target_before,"skipped":plan["skipped"],"projectKey":uuid::Uuid::new_v4().to_string(),"resources":[format!("portable:{}:{namespace}",anchor.display())]}))?
         };
         let payload = self
             .journal
@@ -923,6 +1052,7 @@ impl Adapter {
             .collect();
         let result = (|| {
             job.check()?;
+            workspace::materialize(self, anchor, &dir, &m, &op, job)?;
             let project = if let Some(pid) = target {
                 let mut p = self.project(pid)?;
                 let before = roots(&payload["targetBefore"])?;
@@ -1015,5 +1145,22 @@ impl Adapter {
                 .record(&op, "needs_recovery", json!({"error":e,"operationId":op}))?;
         }
         result.map_err(|e| format!("{e}\nPortable restore operation: {op}"))
+    }
+}
+#[cfg(test)]
+mod portable_metadata_tests {
+    use super::*;
+    #[test]
+    fn oversized_metadata_is_rejected_before_publication() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test-artifacts")
+            .join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&dir).unwrap();
+        assert!(write_new(
+            &dir.join("metadata.json"),
+            &vec![b' '; 32 * 1024 * 1024 + 1]
+        )
+        .is_err());
+        assert!(!dir.join("metadata.json").exists());
     }
 }

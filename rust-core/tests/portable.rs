@@ -136,27 +136,30 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
     let anchor = base.join("원본 폴더");
     fs::create_dir(&anchor).unwrap();
     fs::write(anchor.join("normal.txt"), b"normal original bytes").unwrap();
-    let project = source
-        .create("Portable project", std::slice::from_ref(&anchor))
-        .unwrap();
+    let external = base.join("External root");
+    fs::create_dir(&external).unwrap();
+    fs::write(external.join("external.txt"), b"external bytes").unwrap();
+    let source_roots = vec![anchor.clone(), external.clone()];
+    let project = source.create("Portable project", &source_roots).unwrap();
     let parent = uuid::Uuid::new_v4().to_string();
     let child = uuid::Uuid::new_v4().to_string();
     for (id, title, is_child) in [(&parent, "Parent", false), (&child, "Child", true)] {
         let path = base.join(format!("{id}.jsonl"));
+        let cwd = if is_child { &external } else { &anchor };
         let origin = if is_child {
             json!({"subagent":{"thread_spawn":{"parent_thread_id":parent,"depth":1}}})
         } else {
             json!("cli")
         };
-        let meta = json!({"timestamp":"2026-11-02T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-11-02T00:00:00Z","cwd":anchor,"runtime_workspace_roots":[anchor],"originator":"codex_cli_rs","cli_version":"0.0.0","source":origin,"model_provider":"openai"}});
+        let meta = json!({"timestamp":"2026-11-02T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-11-02T00:00:00Z","cwd":cwd,"runtime_workspace_roots":source_roots,"originator":"codex_cli_rs","cli_version":"0.0.0","source":origin,"model_provider":"openai"}});
         let msg = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Historical bytes unchanged"}]}});
         fs::write(&path, format!("{meta}\n{msg}\n")).unwrap();
         source
             .import_thread(
                 &path,
                 id,
-                &anchor,
-                std::slice::from_ref(&anchor),
+                cwd,
+                &source_roots,
                 project["id"].as_str().unwrap(),
                 title,
             )
@@ -184,6 +187,7 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
     let ns = saved["namespace"].as_str().unwrap();
     let moved = base.join("이동 폴더");
     fs::rename(&anchor, &moved).unwrap();
+    fs::rename(&external, base.join("External source offline")).unwrap();
     let before = digest(&moved.join("normal.txt"), &Job::new()).unwrap();
     let plan = target
         .portable_restore_plan(&moved, ns, None, &Job::new())
@@ -218,6 +222,11 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
         digest(&moved.join("normal.txt"), &Job::new()).unwrap(),
         before
     );
+    let connected = PathBuf::from(plan["roots"][1].as_str().unwrap());
+    assert_eq!(
+        fs::read(connected.join("external.txt")).unwrap(),
+        b"external bytes"
+    );
     let restored = all_threads(&target.snapshot().unwrap());
     assert_eq!(restored.len(), 2);
     for old in &threads {
@@ -228,11 +237,15 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
         assert_eq!(t["internal"], old["internal"]);
         assert_eq!(
             clean_path(std::path::Path::new(t["cwd"].as_str().unwrap())),
-            moved
+            if old["id"] == child {
+                connected.clone()
+            } else {
+                moved.clone()
+            }
         );
         assert_eq!(
             runtime_roots(std::path::Path::new(t["path"].as_str().unwrap())).unwrap(),
-            vec![moved.clone()]
+            vec![moved.clone(), connected.clone()]
         );
         assert_eq!(
             messages_digest(
@@ -248,6 +261,27 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
         );
     }
     let pid = result["projectId"].as_str().unwrap();
+    {
+        let mut db = rusqlite::Connection::open(&target.journal.path).unwrap();
+        let tx = db.transaction().unwrap();
+        for i in 0..501 {
+            tx.execute(
+                "INSERT INTO operations(id,state,payload) VALUES(?1,'completed',?2)",
+                rusqlite::params![
+                    format!("unrelated-{i}"),
+                    json!({"kind":"unrelated-test","home":target.store.home}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    assert!(!target
+        .journal
+        .history()
+        .unwrap()
+        .iter()
+        .any(|o| o["id"] == result["operationId"]));
     let repeat = target
         .portable_restore_plan(&moved, ns, Some(pid), &Job::new())
         .unwrap();
@@ -256,6 +290,18 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
         .portable_restore(&moved, ns, Some(pid), None, &Job::new())
         .unwrap();
     target.release_server();
+    let continued = target.portable_snapshot(pid, &moved, &Job::new()).unwrap();
+    assert_eq!(
+        continued["namespace"], saved["namespace"],
+        "A restored project must continue its trusted portable lineage"
+    );
+    assert_eq!(
+        portable_discover(&moved, 0, 10, &Job::new()).unwrap()["projects"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     let changed = restored.iter().find(|t| t["id"] == parent).unwrap();
     use std::io::Write;
     let mut f = fs::OpenOptions::new()
@@ -276,6 +322,19 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
     assert!(target
         .portable_restore(&moved, ns, Some(pid), None, &Job::new())
         .is_err());
+    target.release_server();
+    let renamed = base.join("Moved again");
+    fs::rename(&moved, &renamed).unwrap();
+    let connected_again = renamed.join(connected.strip_prefix(&moved).unwrap());
+    target
+        .set_roots(pid, &[renamed.clone(), connected_again])
+        .unwrap();
+    target.release_server();
+    assert_eq!(
+        target.portable_namespace(pid, &renamed).unwrap(),
+        ns,
+        "Lineage must survive anchor rename and native root update"
+    );
 }
 #[test]
 fn missing_internal_parent_and_event_attachments_are_not_portable_success() {
@@ -303,4 +362,148 @@ fn symlink_sidecar_and_anchor_dependencies_are_rejected_and_discovery_is_bounded
     }
     let result = portable_discover(anchor.parent().unwrap(), 10, 1, &Job::new()).unwrap();
     assert_eq!(result["truncated"], true);
+}
+#[test]
+fn connected_external_root_is_owned_verified_and_retained_bounded() {
+    let (anchor, source, mut c) = fixture();
+    let external = anchor.parent().unwrap().join("Connected source");
+    fs::create_dir(&external).unwrap();
+    fs::write(external.join("asset.bin"), b"first external bytes").unwrap();
+    fs::create_dir(external.join(".codex-manager")).unwrap();
+    fs::write(
+        external.join(".codex-manager/private.json"),
+        b"must not recurse",
+    )
+    .unwrap();
+    c.projects[0].project["roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":external}));
+    c.projects[0].threads[0]["cwd"] = json!(external);
+    let text = format!(
+        "{}\n",
+        json!({"type":"session_meta","payload":{"id":ID,"cwd":external,"runtime_workspace_roots":[anchor,external]}})
+    );
+    fs::write(source, text).unwrap();
+    let first = snapshot(&anchor, &c);
+    let ns = first["namespace"].as_str().unwrap();
+    let inspected = portable_inspect(&anchor, ns, &Job::new()).unwrap();
+    assert_eq!(inspected["externalRoots"].as_array().unwrap().len(), 1);
+    let root = &inspected["externalRoots"][0];
+    let payload = anchor
+        .join(".codex-manager/projects")
+        .join(ns)
+        .join("workspaces")
+        .join(root["treeHash"].as_str().unwrap())
+        .join("data");
+    assert_eq!(
+        fs::read(payload.join("asset.bin")).unwrap(),
+        b"first external bytes"
+    );
+    assert!(!payload.join(".codex-manager").exists());
+    for i in 0..4 {
+        fs::write(external.join("asset.bin"), format!("changed {i}")).unwrap();
+        snapshot(&anchor, &c);
+    }
+    let stores = anchor
+        .join(".codex-manager/projects")
+        .join(ns)
+        .join("workspaces");
+    assert_eq!(fs::read_dir(stores).unwrap().count(), 2);
+    assert_eq!(fs::read(external.join("asset.bin")).unwrap(), b"changed 3");
+}
+#[test]
+fn portable_folder_copy_to_another_volume_identity_does_not_break_payloads() {
+    let (anchor, _, mut c) = fixture();
+    let ext = anchor.parent().unwrap().join("external");
+    fs::create_dir(&ext).unwrap();
+    fs::write(ext.join("asset"), b"external").unwrap();
+    c.projects[0].project["roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":ext}));
+    let saved = snapshot(&anchor, &c);
+    let copied = anchor.parent().unwrap().join("copied folder");
+    let tree = scan_tree(&anchor, &Job::new()).unwrap();
+    copy_tree(&anchor, &copied, &tree, &Job::new()).unwrap();
+    assert!(portable_inspect(&copied, saved["namespace"].as_str().unwrap(), &Job::new()).is_ok());
+}
+#[test]
+fn failed_first_snapshot_is_discoverable_as_incomplete_with_error() {
+    let (anchor, source, c) = fixture();
+    fs::write(source, b"invalid\n").unwrap();
+    assert!(portable_snapshot(&c, "project-one", &anchor, &Job::new()).is_err());
+    let found = portable_discover(&anchor, 0, 10, &Job::new()).unwrap();
+    let projects = found["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0]["complete"], false);
+    assert_eq!(projects[0]["lastAttempt"]["state"], "failed");
+    assert!(projects[0]["lastAttempt"]["error"]
+        .as_str()
+        .unwrap()
+        .contains(ID));
+    assert!(projects[0]["lastAttempt"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("Title"));
+}
+#[test]
+fn edited_old_workspace_payload_is_retained_with_warning_and_original_untouched() {
+    let (anchor, _, mut c) = fixture();
+    let ext = anchor.parent().unwrap().join("ext");
+    fs::create_dir(&ext).unwrap();
+    fs::write(ext.join("asset"), b"one").unwrap();
+    c.projects[0].project["roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":ext}));
+    let a = snapshot(&anchor, &c);
+    let ns = a["namespace"].as_str().unwrap();
+    let m = portable_inspect(&anchor, ns, &Job::new()).unwrap();
+    let retained = anchor
+        .join(".codex-manager/projects")
+        .join(ns)
+        .join("workspaces")
+        .join(m["externalRoots"][0]["treeHash"].as_str().unwrap())
+        .join("data/asset");
+    fs::write(&retained, b"user edited backup payload").unwrap();
+    fs::write(ext.join("asset"), b"two").unwrap();
+    snapshot(&anchor, &c);
+    fs::write(ext.join("asset"), b"three").unwrap();
+    let last = snapshot(&anchor, &c);
+    assert!(last["retentionWarning"]
+        .as_str()
+        .unwrap()
+        .contains("retained"));
+    assert_eq!(fs::read(&retained).unwrap(), b"user edited backup payload");
+    assert_eq!(fs::read(ext.join("asset")).unwrap(), b"three");
+}
+#[test]
+fn self_checksummed_manifest_cannot_escape_blob_or_workspace_paths() {
+    use sha2::{Digest, Sha256};
+    let (anchor, _, c) = fixture();
+    let saved = snapshot(&anchor, &c);
+    let ns = saved["namespace"].as_str().unwrap();
+    let dir = anchor.join(".codex-manager/projects").join(ns);
+    let original: Value = serde_json::from_slice(
+        &fs::read(
+            dir.join("manifests")
+                .join(format!("{}.json", saved["snapshotId"].as_str().unwrap())),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for key in ["sha256", "cwd"] {
+        let mut m = original.clone();
+        m["conversations"][0][key] = json!("../outside");
+        let bytes = serde_json::to_vec(&m).unwrap();
+        let id = format!("{:x}", Sha256::digest(&bytes));
+        fs::write(dir.join("manifests").join(format!("{id}.json")), bytes).unwrap();
+        fs::write(
+            dir.join("current.json"),
+            json!({"snapshotId":id}).to_string(),
+        )
+        .unwrap();
+        assert!(portable_inspect(&anchor, ns, &Job::new()).is_err());
+    }
 }

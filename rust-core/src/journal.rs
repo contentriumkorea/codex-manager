@@ -100,6 +100,26 @@ impl Journal {
         }
         tx.commit().map_err(|e| e.to_string())
     }
+    /// Durable workflow lookup, independent of the bounded UI history window.
+    pub(crate) fn operations_for(&self, kind: &str, home: &Path) -> Result<Vec<Value>, String> {
+        let db = self.db()?;
+        let mut query=db.prepare("SELECT id,state,payload FROM operations WHERE json_extract(payload,'$.kind')=?1 AND json_extract(payload,'$.home')=?2 ORDER BY rowid DESC").map_err(|e|e.to_string())?;
+        let rows = query
+            .query_map(params![kind, home.to_string_lossy().as_ref()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| {
+            let (id, state, payload) = r.map_err(|e| e.to_string())?;
+            let payload: Value = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            Ok(json!({"id":id,"state":state,"payload":payload}))
+        })
+        .collect()
+    }
     pub fn history(&self) -> Result<Vec<Value>, String> {
         let db = self.db()?;
         let mut q=db.prepare("SELECT id,state,payload,(SELECT min(created_at) FROM events WHERE operation_id=operations.id) FROM operations WHERE state NOT IN ('completed','cancelled') OR rowid IN (SELECT rowid FROM operations ORDER BY rowid DESC LIMIT 500) ORDER BY rowid DESC").map_err(|e|e.to_string())?;
