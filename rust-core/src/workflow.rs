@@ -260,7 +260,12 @@ impl Adapter {
                 let mut p = self.project(id)?;
                 let mut paths = roots(&original_target)?;
                 for path in destinations {
-                    if !paths.contains(path) {
+                    // A merge into a folder already covered by a project root
+                    // must not create nested roots that later exports reject.
+                    let covered = paths
+                        .iter()
+                        .any(|root| map_workspace(path, &[(root.clone(), root.clone())]).is_ok());
+                    if !covered {
                         paths.push(path.clone());
                     }
                 }

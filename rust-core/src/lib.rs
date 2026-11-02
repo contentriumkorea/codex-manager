@@ -51,3 +51,6 @@ pub use rpc::{
     collect_pages, read_response, thread_list_params, CodexProcess, ProjectFilter, RpcClient,
     TimedReader,
 };
+
+mod cross_store;
+pub use cross_store::{cross_store_plan, cross_store_resume, cross_store_transfer};

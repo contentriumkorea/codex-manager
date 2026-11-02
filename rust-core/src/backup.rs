@@ -74,6 +74,15 @@ pub fn backup_project(
     destination: &Path,
     job: &Job,
 ) -> Result<Value, String> {
+    backup_project_observed(catalog, id, destination, job, &|_| Ok(()))
+}
+pub(crate) fn backup_project_observed(
+    catalog: &Catalog,
+    id: &str,
+    destination: &Path,
+    job: &Job,
+    created: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<Value, String> {
     absolute(destination)?;
     if destination.exists() {
         return Err("백업 폴더가 이미 있습니다. 새 폴더를 선택하세요.".into());
@@ -196,6 +205,7 @@ pub fn backup_project(
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::create_dir(destination).map_err(|e| e.to_string())?;
+    created(destination)?;
     let mut inventory = Vec::new();
     let mut directories = Vec::new();
     for (rid, source, tree) in &captures {

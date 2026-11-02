@@ -17,6 +17,7 @@ pub struct Adapter {
     isolated: bool,
     server: Option<CodexProcess>,
     mutation_lock: std::sync::Mutex<Option<fs::File>>,
+    pub(crate) recovery_override: Option<PathBuf>,
     pub(crate) undo_attempt: std::sync::Mutex<Option<(String, bool)>>,
 }
 pub fn valid_name(name: &str) -> Result<String, String> {
@@ -86,6 +87,9 @@ impl Adapter {
             .collect::<Vec<_>>();
         crate::platform::desktop_closed_except(&owned)
     }
+    pub(crate) fn isolated_checkpoint(&self, request: &Value, checkpoint: &str) -> bool {
+        self.isolated && request["__testInterruptAt"] == checkpoint
+    }
     pub fn protected_storage(&self) -> Vec<PathBuf> {
         let mut paths = vec![
             self.store.home.clone(),
@@ -121,6 +125,7 @@ impl Adapter {
             isolated: false,
             server: None,
             mutation_lock: std::sync::Mutex::new(None),
+            recovery_override: None,
             undo_attempt: std::sync::Mutex::new(None),
         })
     }
@@ -349,7 +354,9 @@ impl Adapter {
         )
     }
     pub fn recovery_root(&self) -> PathBuf {
-        self.journal.path.parent().unwrap().join("recovery")
+        self.recovery_override
+            .clone()
+            .unwrap_or_else(|| self.journal.path.parent().unwrap().join("recovery"))
     }
     pub fn release_server(&mut self) {
         self.server = None;

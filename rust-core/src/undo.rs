@@ -31,6 +31,9 @@ impl Adapter {
         let mut p = record["payload"].clone();
         p["_operationState"] = record["state"].clone();
         let kind = field(&p, "kind")?.to_owned();
+        if kind == "rust-cross-store" {
+            return Err("저장소 간 전송은 되돌리기를 지원하지 않습니다. 미완료 전송은 전송 계속을 사용하세요.".into());
+        }
         if clean_path(Path::new(field(&p, "home")?))
             .to_string_lossy()
             .to_lowercase()

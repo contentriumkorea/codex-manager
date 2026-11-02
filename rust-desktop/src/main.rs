@@ -40,9 +40,12 @@ fn options() -> Result<Options, String> {
 }
 
 #[tauri::command]
-async fn bootstrap(service: State<'_, Arc<Service>>) -> Result<Value, String> {
+async fn bootstrap(
+    service: State<'_, Arc<Service>>,
+    pane: Option<String>,
+) -> Result<Value, String> {
     let s = Arc::clone(&service);
-    tauri::async_runtime::spawn_blocking(move || s.bootstrap())
+    tauri::async_runtime::spawn_blocking(move || s.bootstrap_pane(pane.as_deref()))
         .await
         .map_err(|_| "프로그램 정보를 읽지 못했습니다.")?
 }
@@ -54,9 +57,13 @@ async fn catalog(service: State<'_, Arc<Service>>, home: String) -> Result<Value
         .map_err(|_| "목록을 읽지 못했습니다.")?
 }
 #[tauri::command]
-async fn select_home(service: State<'_, Arc<Service>>, home: String) -> Result<(), String> {
+async fn select_home(
+    service: State<'_, Arc<Service>>,
+    home: String,
+    pane: Option<String>,
+) -> Result<(), String> {
     let s = Arc::clone(&service);
-    tauri::async_runtime::spawn_blocking(move || s.select_home(&home))
+    tauri::async_runtime::spawn_blocking(move || s.select_home(&home, pane.as_deref()))
         .await
         .map_err(|_| "저장소를 연결하지 못했습니다.")?
 }

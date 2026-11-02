@@ -134,14 +134,21 @@ impl Service {
         }) {
             return Err("설정에서 저장소를 먼저 연결하세요.".into());
         }
-        resolve_store(home)
+        let store = resolve_store(home)?;
+        if let Some(root) = &self.options.test_root {
+            if !clean_path(&store.sqlite_home).starts_with(clean_path(root)) {
+                return Err("시험 데이터베이스가 시험 범위 밖에 있습니다.".into());
+            }
+        }
+        Ok(store)
     }
-    fn save(&self, values: Value) -> Result<(), String> {
+    fn change_settings(
+        &self,
+        change: impl FnOnce(&mut Value) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut settings = self.settings.lock().map_err(|_| "설정 잠금 오류")?;
         let mut merged = settings.clone();
-        for (key, value) in values.as_object().ok_or("설정 형식 오류")? {
-            merged[key] = value.clone();
-        }
+        change(&mut merged)?;
         let temporary = self
             .options
             .data
@@ -152,16 +159,56 @@ impl Service {
         *settings = merged;
         Ok(())
     }
-    fn add_homes(&self, new: &[PathBuf]) -> Result<(), String> {
-        let mut homes = self.seeds()?;
-        for home in new {
-            if !homes.contains(home) {
-                homes.push(home.clone());
+    fn save(&self, values: Value) -> Result<(), String> {
+        self.change_settings(|settings| {
+            for (key, value) in values.as_object().ok_or("설정 형식 오류")? {
+                settings[key] = value.clone();
             }
-        }
-        self.save(json!({"homes":homes}))
+            Ok(())
+        })
+    }
+    fn add_homes(&self, new: &[PathBuf]) -> Result<(), String> {
+        self.change_settings(|settings| {
+            let mut homes = settings["homes"].as_array().cloned().unwrap_or_default();
+            for home in new {
+                let value = json!(home);
+                if !homes.contains(&value) {
+                    homes.push(value);
+                }
+            }
+            settings["homes"] = json!(homes);
+            Ok(())
+        })
     }
     pub fn bootstrap(&self) -> Result<Value, String> {
+        self.bootstrap_pane(None)
+    }
+    fn pane(pane: Option<&str>) -> Result<Option<&str>, String> {
+        if pane.is_some_and(|p| !["left", "right"].contains(&p)) {
+            return Err("탐색기 선택 오류".into());
+        }
+        Ok(pane)
+    }
+    fn pane_home(&self, pane: Option<&str>) -> Result<PathBuf, String> {
+        if let Some(pane) = Self::pane(pane)? {
+            if let Some(home) =
+                self.settings.lock().map_err(|_| "설정 잠금 오류")?["panes"][pane]["home"].as_str()
+            {
+                return Ok(home.into());
+            }
+        }
+        self.home()
+    }
+    fn size_cache(&self, home: &Path) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let key = clean_path(home).to_string_lossy().to_lowercase();
+        self.options.data.join(format!(
+            "folder-sizes-{:x}.json",
+            Sha256::digest(key.as_bytes())
+        ))
+    }
+    pub fn bootstrap_pane(&self, pane: Option<&str>) -> Result<Value, String> {
+        let home = self.pane_home(pane)?;
         let seeds = self.seeds()?;
         let mut stores = Vec::new();
         for home in &seeds {
@@ -176,20 +223,21 @@ impl Service {
             };
             stores.push(info);
         }
-        let cache_path = self.options.data.join("folder-sizes.json");
+        let cache_path = self.size_cache(&home);
         let sizes = fs::read(&cache_path)
             .ok()
             .and_then(|s| serde_json::from_slice::<Value>(&s).ok())
             .unwrap_or(json!({}));
         Ok(
-            json!({"version":VERSION,"home":self.home()?,"stores":stores,"settings":self.settings.lock().map_err(|_|"설정 잠금 오류")?.clone(),"sizes":sizes,"testMode":self.options.test_root.is_some(),"noUpdate":self.options.no_update}),
+            json!({"version":VERSION,"home":home,"pane":pane,"stores":stores,"settings":self.settings.lock().map_err(|_|"설정 잠금 오류")?.clone(),"sizes":sizes,"testMode":self.options.test_root.is_some(),"noUpdate":self.options.no_update}),
         )
     }
     pub fn catalog(&self, home: &str) -> Result<Value, String> {
         let store = self.checked_home(home)?;
         read_store(&store).map(catalog_json)
     }
-    pub fn select_home(&self, home: &str) -> Result<(), String> {
+    pub fn select_home(&self, home: &str, pane: Option<&str>) -> Result<(), String> {
+        Self::pane(pane)?;
         let path = PathBuf::from(home);
         absolute(&path)?;
         if let Some(root) = &self.options.test_root {
@@ -198,9 +246,32 @@ impl Service {
             }
         }
         let store = resolve_store(&path)?;
+        if let Some(root) = &self.options.test_root {
+            if !clean_path(&store.sqlite_home).starts_with(clean_path(root)) {
+                return Err("시험 데이터베이스가 시험 범위 밖에 있습니다.".into());
+            }
+        }
         read_store(&store)?;
-        self.add_homes(std::slice::from_ref(&path))?;
-        self.save(json!({"home":path}))
+        self.change_settings(|settings| {
+            let mut homes = settings["homes"].as_array().cloned().unwrap_or_default();
+            let value = json!(path);
+            if !homes.contains(&value) {
+                homes.push(value.clone());
+            }
+            settings["homes"] = json!(homes);
+            if let Some(pane) = pane {
+                if !settings["panes"].is_object() {
+                    settings["panes"] = json!({});
+                }
+                if !settings["panes"][pane].is_object() {
+                    settings["panes"][pane] = json!({});
+                }
+                settings["panes"][pane]["home"] = value;
+            } else {
+                settings["home"] = value;
+            }
+            Ok(())
+        })
     }
     pub fn files(
         &self,
@@ -345,6 +416,7 @@ impl Service {
         let readonly = [
             "scan",
             "sizes",
+            "cross_store_plan",
             "discover_backups",
             "verify_backup",
             "update_check",
@@ -404,6 +476,32 @@ impl Service {
             }
         }
         match action {
+            "pane_preferences" => {
+                let pane = str_arg(args, "pane")?;
+                Self::pane(Some(pane))?;
+                let mut result = Value::Null;
+                self.change_settings(|settings| {
+                    if !settings["panes"].is_object() {
+                        settings["panes"] = json!({});
+                    }
+                    if !settings["panes"][pane].is_object() {
+                        settings["panes"][pane] = json!({});
+                    }
+                    if let Some(destination) = args.get("destination") {
+                        if let Some(path) = destination.as_str().filter(|p| !p.is_empty()) {
+                            absolute(Path::new(path))?;
+                            settings["panes"][pane]["destination"] = json!(path);
+                        } else if destination.is_null() || destination == "" {
+                            settings["panes"][pane]["destination"] = Value::Null;
+                        } else {
+                            return Err("대상 폴더 설정 오류".into());
+                        }
+                    }
+                    result = settings["panes"][pane].clone();
+                    Ok(())
+                })?;
+                return Ok(result);
+            }
             "accept_terms" => {
                 self.save(json!({"webview2_terms":"2026-11-02"}))?;
                 return Ok(json!({"accepted":true}));
@@ -469,7 +567,7 @@ impl Service {
                     sizes[group.project["id"].as_str().ok_or("프로젝트 ID 누락")?] =
                         json!({"bytes":total,"error":error,"cachedAt":chrono_now()});
                 }
-                let cache = self.options.data.join("folder-sizes.json");
+                let cache = self.size_cache(Path::new(str_arg(args, "home")?));
                 let temporary = self
                     .options
                     .data
@@ -487,6 +585,58 @@ impl Service {
         }
         let home = str_arg(args, "home")?;
         let mut adapter = self.adapter(home)?;
+        if [
+            "cross_store_plan",
+            "cross_store_transfer",
+            "cross_store_resume",
+        ]
+        .contains(&action)
+        {
+            let target_home = if action == "cross_store_resume" {
+                let record = self
+                    .journal
+                    .operation(str_arg(args, "id")?)?
+                    .ok_or("전송 기록이 없습니다.")?;
+                if record["payload"]["sourceHome"] != home {
+                    return Err("작업을 시작한 저장소를 선택하세요.".into());
+                }
+                str_arg(&record["payload"], "targetHome")?.to_owned()
+            } else {
+                str_arg(args, "targetHome")?.to_owned()
+            };
+            let mut target = self.adapter(&target_home)?;
+            if let Some(root) = &self.options.test_root {
+                let checked = if action == "cross_store_resume" {
+                    self.journal
+                        .operation(str_arg(args, "id")?)?
+                        .ok_or("전송 기록 누락")?["payload"]["request"]
+                        .clone()
+                } else {
+                    args.clone()
+                };
+                if let Some(destination) = checked["destination"].as_str() {
+                    absolute(Path::new(destination))?;
+                    if !clean_path(Path::new(destination)).starts_with(clean_path(root)) {
+                        return Err("시험 대상이 시험 범위 밖에 있습니다.".into());
+                    }
+                }
+                if checked["kind"] == "files" {
+                    for path in strings(&checked, "ids")? {
+                        absolute(Path::new(&path))?;
+                        if !clean_path(Path::new(&path)).starts_with(clean_path(root)) {
+                            return Err("시험 파일이 시험 범위 밖에 있습니다.".into());
+                        }
+                    }
+                }
+            }
+            return match action {
+                "cross_store_plan" => cross_store_plan(&adapter, &target, args, job),
+                "cross_store_transfer" => {
+                    cross_store_transfer(&mut adapter, &mut target, args, job)
+                }
+                _ => cross_store_resume(&mut adapter, &mut target, str_arg(args, "id")?, job),
+            };
+        }
         if let Some(expected) = args["expectedRevision"].as_str() {
             if catalog_json(adapter.snapshot()?)["revision"] != expected {
                 return Err(
@@ -697,4 +847,70 @@ fn folder_size(root: &Path, job: &Job) -> Result<u64, String> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod pane_tests {
+    use super::*;
+    #[test]
+    fn concurrent_pane_updates_preserve_homes_preferences_and_size_isolation() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test-artifacts")
+            .join(format!("panes-{}", uuid::Uuid::new_v4()));
+        let default = root.join("default");
+        let left = root.join("left");
+        let right = root.join("right");
+        for p in [&default, &left, &right] {
+            fs::create_dir_all(p).unwrap();
+        }
+        let service = Arc::new(
+            Service::new(Options {
+                data: root.join("manager"),
+                home: Some(default.clone()),
+                health: None,
+                no_update: true,
+                test_root: Some(root.clone()),
+            })
+            .unwrap(),
+        );
+        std::thread::scope(|scope| {
+            for (pane, home) in [("left", left.clone()), ("right", right.clone())] {
+                let service = Arc::clone(&service);
+                scope.spawn(move || {
+                    for _ in 0..8 {
+                        service
+                            .select_home(home.to_str().unwrap(), Some(pane))
+                            .unwrap();
+                        service
+                            .run(
+                                "pane_preferences",
+                                &json!({"pane":pane,"destination":home.join("output")}),
+                                &Job::new(),
+                            )
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        let settings: Value =
+            serde_json::from_slice(&fs::read(service.options.data.join("settings.json")).unwrap())
+                .unwrap();
+        for (pane, home) in [("left", &left), ("right", &right)] {
+            assert_eq!(settings["panes"][pane]["home"], json!(home));
+            assert_eq!(
+                settings["panes"][pane]["destination"],
+                json!(home.join("output"))
+            );
+            assert!(service.checked_home(home.to_str().unwrap()).is_ok());
+            assert_eq!(
+                service.bootstrap_pane(Some(pane)).unwrap()["home"],
+                json!(home)
+            );
+        }
+        assert_eq!(service.bootstrap().unwrap()["home"], json!(default));
+        assert_ne!(service.size_cache(&left), service.size_cache(&right));
+        assert!(service
+            .select_home(left.to_str().unwrap(), Some("third"))
+            .is_err());
+    }
 }

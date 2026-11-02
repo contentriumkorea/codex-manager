@@ -17,7 +17,12 @@ fn matches(actual: &Tree, expected: &Tree, identities: bool) -> bool {
             })
         })
 }
-fn delete_file(source: &Path, destination: &Path, entry: &Entry, job: &Job) -> Result<(), String> {
+pub(crate) fn delete_verified_file(
+    source: &Path,
+    destination: &Path,
+    entry: &Entry,
+    job: &Job,
+) -> Result<(), String> {
     ensure_plain(source)?;
     ensure_plain(destination)?;
     if digest(destination, job)? != entry.sha256 {
@@ -97,7 +102,7 @@ pub fn remove_verified_tree(
     job.phase_items("검증된 원본 파일 정리", tree.files.len() as u64);
     for (i, entry) in tree.files.iter().enumerate() {
         job.check()?;
-        delete_file(
+        delete_verified_file(
             &source.join(&entry.path),
             &destination.join(&entry.path),
             entry,
