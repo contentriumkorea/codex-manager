@@ -1,10 +1,11 @@
 .app {
-  grid-template-columns: 132px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
 }
 .sidebar {
   margin: 8px 0 8px 8px;
   padding: 12px 5px 8px;
   border-radius: 12px;
+  min-width: 0;
 }
 .sidebar .brand,
 .side-bottom,
@@ -12,31 +13,54 @@
   display: none;
 }
 .nav {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) max-content;
   padding: 8px 6px;
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.nav .nav-icon {
+  text-align: center;
+}
+.nav .nav-label {
+  min-width: 0;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.nav .badge {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .side-heading {
   margin: 16px 6px 6px;
 }
 .project-nav button {
   padding: 7px 6px;
+  max-width: 100%;
+}
+.project-nav {
+  min-width: 0;
+  overflow-x: hidden;
 }
 main {
   padding: 10px 12px 8px;
   min-width: 0;
 }
 .store-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   gap: 6px;
   align-items: end;
   margin-bottom: 8px;
 }
 .store-bar label {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px;
   align-items: center;
   min-width: 0;
-  flex: 1;
 }
 .store-bar span {
   white-space: nowrap;
@@ -45,6 +69,7 @@ main {
 }
 .store-bar select {
   width: 100%;
+  min-width: 0;
   padding: 6px;
 }
 .store-bar button {
@@ -138,7 +163,11 @@ footer {
 }
 @media (max-width: 700px) {
   .app {
-    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-columns: 192px minmax(0, 1fr);
+  }
+  .store-bar label {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
   }
   main {
     padding: 9px;
