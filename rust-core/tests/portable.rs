@@ -507,3 +507,40 @@ fn self_checksummed_manifest_cannot_escape_blob_or_workspace_paths() {
         assert!(portable_inspect(&anchor, ns, &Job::new()).is_err());
     }
 }
+
+#[test]
+fn missing_or_file_nested_roots_and_active_directories_keep_latest_good() {
+    let (anchor, source, mut c) = fixture();
+    let first = snapshot(&anchor, &c);
+    let ns = first["namespace"].as_str().unwrap();
+    let saved_status = portable_status(&anchor, ns).unwrap();
+    let nested = anchor.join("nested dependency");
+    for as_file in [false, true] {
+        if as_file {
+            fs::write(&nested, b"not a directory").unwrap();
+        }
+        c.projects[0].project["roots"] = json!([{"path":anchor},{"path":nested}]);
+        let error = portable_snapshot(&c, "project-one", &anchor, &Job::new()).unwrap_err();
+        assert!(error.contains("nested dependency"));
+        let status = portable_status(&anchor, ns).unwrap();
+        assert_eq!(status["snapshotId"], first["snapshotId"]);
+        assert_eq!(
+            status["lastSuccessfulSave"],
+            saved_status["lastSuccessfulSave"]
+        );
+        assert_eq!(status["lastAttempt"]["state"], "failed");
+        assert!(portable_inspect(&anchor, ns, &Job::new()).is_ok());
+    }
+    c.projects[0].project["roots"] = json!([{"path":anchor}]);
+    let missing = anchor.join("missing active cwd");
+    c.projects[0].threads[0]["cwd"] = json!(missing);
+    assert!(portable_snapshot(&c, "project-one", &anchor, &Job::new()).is_err());
+    c.projects[0].threads[0]["cwd"] = json!(anchor);
+    fs::write(&source,format!("{}\n",json!({"type":"session_meta","payload":{"id":ID,"cwd":anchor,"runtime_workspace_roots":[missing]}}))).unwrap();
+    assert!(portable_snapshot(&c, "project-one", &anchor, &Job::new()).is_err());
+    assert_eq!(
+        portable_status(&anchor, ns).unwrap()["snapshotId"],
+        first["snapshotId"]
+    );
+    assert!(portable_inspect(&anchor, ns, &Job::new()).is_ok());
+}

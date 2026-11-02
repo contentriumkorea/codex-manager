@@ -173,17 +173,7 @@ pub fn portable_inspect(anchor: &Path, namespace: &str, job: &Job) -> Result<Val
     workspace::verify(anchor, &dir, &m, job)?;
     let mut ids = HashSet::new();
     for r in m["roots"].as_array().ok_or("Missing portable roots")? {
-        let original = r.as_str().ok_or("Invalid root")?;
-        let path = workspace::map(anchor, &m, original)?;
-        let external = m["externalRoots"]
-            .as_array()
-            .is_some_and(|a| a.iter().any(|r| r["original"] == original));
-        if !external && !path.is_dir() {
-            return Err(format!(
-                "Portable working folder missing: {}",
-                path.display()
-            ));
-        }
+        workspace::require_mapped_directory(anchor, &dir, &m, r.as_str().ok_or("Invalid root")?)?;
     }
     if !m["dependencies"]
         .as_array()
@@ -202,12 +192,17 @@ pub fn portable_inspect(anchor: &Path, namespace: &str, job: &Job) -> Result<Val
         if !ids.insert(id) {
             return Err("Duplicate portable thread UUID".into());
         }
-        workspace::map(anchor, &m, string(t, "cwd")?)?;
+        workspace::require_mapped_directory(anchor, &dir, &m, string(t, "cwd")?)?;
         for r in t["runtimeRoots"]
             .as_array()
             .ok_or("Missing runtime roots")?
         {
-            workspace::map(anchor, &m, r.as_str().ok_or("Invalid runtime root")?)?;
+            workspace::require_mapped_directory(
+                anchor,
+                &dir,
+                &m,
+                r.as_str().ok_or("Invalid runtime root")?,
+            )?;
         }
         let key = hash_key(string(t, "sha256")?)?;
         let blob = dir.join("blobs").join(key);
@@ -577,10 +572,14 @@ fn portable_snapshot_namespace(
                 (runtime, deps, format!("{:x}", decoded.finalize()))
             };
             let cwd = string(t, "cwd")?;
+            workspace::require_directory(Path::new(cwd)).map_err(&context)?;
             if workspace::map(anchor, &location, cwd).is_err() {
                 deps.push(json!({"kind":"external_cwd","threadId":id,"path":cwd,"resolved":false}));
             }
             for r in &mut runtime {
+                if let Some(path) = r.as_str() {
+                    workspace::require_directory(Path::new(path)).map_err(&context)?;
+                }
                 if r.as_str()
                     .is_none_or(|p| workspace::map(anchor, &location, p).is_err())
                 {
@@ -624,6 +623,14 @@ fn portable_snapshot_namespace(
     result
 }
 fn collect(dir: &Path, pointer: &Value, job: &Job) -> Result<(), String> {
+    collect_with_hook(dir, pointer, job, &|_| Ok(()))
+}
+fn collect_with_hook(
+    dir: &Path,
+    pointer: &Value,
+    job: &Job,
+    before_delete: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
     let keep: HashSet<_> = [pointer["snapshotId"].as_str(), pointer["previous"].as_str()]
         .into_iter()
         .flatten()
@@ -654,9 +661,22 @@ fn collect(dir: &Path, pointer: &Value, job: &Job) -> Result<(), String> {
         if p.extension().is_some_and(|e| e == "json") && hash_key(id).is_ok() && !keep.contains(id)
         {
             let m = read_json(&p)?;
-            if hash(&serde_json::to_vec(&m).map_err(|e| e.to_string())?) == id {
-                fs::remove_file(&p).map_err(|e| e.to_string())?;
+            let bytes = serde_json::to_vec(&m).map_err(|e| e.to_string())?;
+            if hash(&bytes) != id {
+                return Err(format!(
+                    "Manifest retained because it changed: {}",
+                    p.display()
+                ));
             }
+            let entry = crate::Entry {
+                path: String::new(),
+                size: bytes.len() as u64,
+                sha256: id.to_owned(),
+                identity: None,
+            };
+            before_delete(&p)?;
+            workspace::delete_owned(&p, &entry, job)
+                .map_err(|e| format!("Manifest retained: {}: {e}", p.display()))?;
         }
     }
     for e in fs::read_dir(dir.join("blobs")).map_err(|e| e.to_string())? {
@@ -666,8 +686,19 @@ fn collect(dir: &Path, pointer: &Value, job: &Job) -> Result<(), String> {
         let Some(key) = p.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if hash_key(key).is_ok() && !blobs.contains(key) && digest(&p, job)? == key {
-            fs::remove_file(p).map_err(|e| e.to_string())?;
+        if hash_key(key).is_ok() && !blobs.contains(key) {
+            if digest(&p, job)? != key {
+                return Err(format!("Blob retained because it changed: {}", p.display()));
+            }
+            let entry = crate::Entry {
+                path: String::new(),
+                size: fs::metadata(&p).map_err(|e| e.to_string())?.len(),
+                sha256: key.to_owned(),
+                identity: None,
+            };
+            before_delete(&p)?;
+            workspace::delete_owned(&p, &entry, job)
+                .map_err(|e| format!("Blob retained: {}: {e}", p.display()))?;
         }
     }
     workspace::collect(dir, &retained_manifests, job)?;
@@ -1162,5 +1193,59 @@ mod portable_metadata_tests {
         )
         .is_err());
         assert!(!dir.join("metadata.json").exists());
+    }
+}
+
+#[cfg(test)]
+mod portable_gc_tests {
+    use super::*;
+    #[test]
+    fn changed_or_replaced_gc_candidates_survive_prevalidation_race() {
+        for kind in ["manifest", "blob"] {
+            for replacement in [false, true] {
+                let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(".test-artifacts")
+                    .join(uuid::Uuid::new_v4().to_string());
+                fs::create_dir_all(dir.join("manifests")).unwrap();
+                fs::create_dir(dir.join("blobs")).unwrap();
+                let current = json!({"conversations":[],"label":"current"});
+                let bytes = serde_json::to_vec(&current).unwrap();
+                let current_id = hash(&bytes);
+                write_new(
+                    &dir.join("manifests").join(format!("{current_id}.json")),
+                    &bytes,
+                )
+                .unwrap();
+                let bytes = if kind == "manifest" {
+                    serde_json::to_vec(&json!({"conversations":[],"label":"obsolete"})).unwrap()
+                } else {
+                    b"obsolete raw blob".to_vec()
+                };
+                let key = hash(&bytes);
+                let candidate = if kind == "manifest" {
+                    dir.join("manifests").join(format!("{key}.json"))
+                } else {
+                    dir.join("blobs").join(key)
+                };
+                write_new(&candidate, &bytes).unwrap();
+                let result =
+                    collect_with_hook(&dir, &json!({"snapshotId":current_id}), &Job::new(), &|p| {
+                        if p == candidate {
+                            if replacement {
+                                fs::rename(p, dir.join("original-retained"))
+                                    .map_err(|e| e.to_string())?;
+                            }
+                            fs::write(p, b"new user bytes after validation")
+                                .map_err(|e| e.to_string())?;
+                        }
+                        Ok(())
+                    });
+                assert!(result.is_err(),"{kind} replacement={replacement}: changed GC candidate must produce retention warning");
+                assert_eq!(
+                    fs::read(&candidate).unwrap(),
+                    b"new user bytes after validation"
+                );
+            }
+        }
     }
 }

@@ -155,6 +155,7 @@ pub(super) fn capture(
 ) -> Result<Vec<Value>, String> {
     let mut external = vec![];
     for r in roots {
+        require_directory(r)?;
         if r.join(".git").is_file() {
             return Err(format!("Unresolved linked worktree: {}", r.display()));
         }
@@ -418,7 +419,7 @@ pub(super) fn collect(dir: &Path, manifests: &[Value], job: &Job) -> Result<(), 
         Err(warnings.join("\n"))
     }
 }
-fn delete_owned(path: &Path, entry: &Entry, job: &Job) -> Result<(), String> {
+pub(super) fn delete_owned(path: &Path, entry: &Entry, job: &Job) -> Result<(), String> {
     ensure_plain(path)?;
     #[cfg(windows)]
     {
@@ -464,4 +465,38 @@ fn delete_owned(path: &Path, entry: &Entry, job: &Job) -> Result<(), String> {
         let _ = (entry, job);
         Err("Safe workspace collection requires Windows".into())
     }
+}
+
+pub(super) fn require_directory(path: &Path) -> Result<(), String> {
+    absolute(path)
+        .map_err(|e| format!("Unresolved workspace directory {}: {e}", path.display()))?;
+    if !path.is_dir() {
+        return Err(format!(
+            "Unresolved workspace directory (missing or not a directory): {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+pub(super) fn require_mapped_directory(
+    anchor: &Path,
+    dir: &Path,
+    m: &Value,
+    path: &str,
+) -> Result<(), String> {
+    let mut physical = map(anchor, m, path)?;
+    for r in external_roots(m)? {
+        let payload = dir
+            .join("workspaces")
+            .join(hash_key(string(r, "treeHash")?)?)
+            .join("data");
+        if let Ok(mapped) = map_workspace(
+            Path::new(path),
+            &[(PathBuf::from(string(r, "original")?), payload)],
+        ) {
+            physical = mapped;
+            break;
+        }
+    }
+    require_directory(&physical)
 }
