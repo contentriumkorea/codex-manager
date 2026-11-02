@@ -15,29 +15,32 @@
           <img src="app-icon.png" alt="" />
           <div>
             <strong>Codex Manager</strong
-            ><small>두 저장소의 프로젝트·대화·파일 관리</small>
+            ><small>폴더와 함께 보관하는 프로젝트·대화·파일</small>
           </div>
         </div>
         <nav aria-label="공통 작업">
-          <button id="global-import">↙ 가져오기</button
+          <button id="global-open-folder">▱ 폴더 열기</button>
+          <button id="global-import">↙ 백업 가져오기</button
           ><button id="global-history">◷ 작업 내역·복구</button
           ><button id="global-settings">⚙ 설정</button
           ><button id="updates">↻ 업데이트 <span id="version"></span></button>
+          <button id="split-toggle" aria-label="분할 화면 열기" aria-pressed="false" title="분할 화면 열기">◫</button>
         </nav>
       </header>
       <div class="shell-actions">
-        <span id="active-label">왼쪽 탐색기 선택됨</span
-        ><button id="transfer-move">선택 항목을 반대편으로 이동</button
-        ><button id="transfer-copy">선택 항목을 반대편으로 복사</button
+        <span id="active-label">메인 화면의 프로젝트·파일을 선택하세요</span
+        ><button id="transfer-move">대상 폴더로 이동</button
+        ><button id="transfer-copy">대상 폴더로 복사</button
         ><span id="shell-status" role="status" aria-live="polite"></span>
       </div>
       <div class="explorers-scroll">
         <div id="explorers" class="explorers">
           <section id="left-pane" class="pane active">
-            <iframe id="left-frame" title="왼쪽 탐색기"></iframe>
+            <iframe id="left-frame" title="프로젝트·대화·파일 관리"></iframe>
           </section>
           <div
             id="splitter"
+            hidden
             role="separator"
             tabindex="0"
             aria-label="탐색기 너비 조절"
@@ -46,8 +49,15 @@
             aria-valuemax="75"
             aria-valuenow="50"
           ></div>
-          <section id="right-pane" class="pane">
-            <iframe id="right-frame" title="오른쪽 탐색기"></iframe>
+          <section id="right-pane" class="pane destination-pane" hidden aria-label="대상 폴더 탐색기">
+            <h2>대상 폴더</h2>
+            <div class="destination-actions"><button id="destination-pick">폴더 선택</button><button id="destination-up" disabled>↑ 상위</button></div>
+            <div class="destination-address"><input id="destination-address" aria-label="대상 폴더 주소" placeholder="폴더 경로 입력"><button id="destination-go">이동</button></div>
+            <input id="destination-search" type="search" aria-label="대상 하위 폴더 검색" placeholder="하위 폴더 검색">
+            <p id="destination-current">대상 폴더를 선택하세요.</p>
+            <small id="destination-hint">현재 폴더에 전송합니다.</small>
+            <div id="destination-list" aria-label="하위 폴더 목록"></div>
+            <div class="destination-actions"><button id="destination-copy">선택 항목 복사</button><button id="destination-move">선택 항목 이동</button></div>
           </section>
         </div>
       </div>

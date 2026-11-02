@@ -291,6 +291,55 @@ fn native_folder_move_restore_preserves_graph_and_conflicts() {
         .unwrap();
     target.release_server();
     let continued = target.portable_snapshot(pid, &moved, &Job::new()).unwrap();
+    let archive = base.join("unregistered archive");
+    fs::create_dir(&archive).unwrap();
+    let copy_op = target
+        .edit_files_to_folder("copy", &[moved.clone()], &archive, &Job::new())
+        .unwrap();
+    let copied = archive.join(moved.file_name().unwrap());
+    assert!(portable_inspect(&copied, ns, &Job::new()).is_ok());
+    assert_eq!(
+        digest(&copied.join("normal.txt"), &Job::new()).unwrap(),
+        before
+    );
+    target.undo(&copy_op).unwrap();
+    let transfer_to = base.join("nested roots moved together");
+    let nested_to = transfer_to.join(connected.strip_prefix(&moved).unwrap());
+    let move_op = target
+        .transfer_project(
+            pid,
+            &[transfer_to.clone(), nested_to.clone()],
+            true,
+            &Job::new(),
+        )
+        .unwrap();
+    assert!(!moved.exists());
+    assert_eq!(
+        fs::read(nested_to.join("external.txt")).unwrap(),
+        b"external bytes"
+    );
+    assert_eq!(
+        roots(
+            &target
+                .snapshot()
+                .unwrap()
+                .projects
+                .iter()
+                .find(|g| g.project["id"] == pid)
+                .unwrap()
+                .project
+        )
+        .unwrap(),
+        vec![transfer_to.clone(), nested_to]
+    );
+    target.undo(&move_op).unwrap();
+    target.release_server();
+    assert_eq!(
+        digest(&moved.join("normal.txt"), &Job::new()).unwrap(),
+        before
+    );
+    // SDK relocation appends active-setting events; the next save records that verified state.
+    target.portable_snapshot(pid, &moved, &Job::new()).unwrap();
     assert_eq!(
         continued["namespace"], saved["namespace"],
         "A restored project must continue its trusted portable lineage"

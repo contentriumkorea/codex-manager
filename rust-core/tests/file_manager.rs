@@ -149,3 +149,59 @@ fn cancelled_undo_uses_the_callers_job_without_changing_files() {
         "completed"
     );
 }
+
+#[test]
+fn external_file_copy_move_and_undo_ignore_unrelated_corrupt_history() {
+    let (mut adapter, root) = setup();
+    let db = rusqlite::Connection::open(adapter.store.database.as_ref().unwrap()).unwrap();
+    db.execute_batch("ALTER TABLE threads ADD COLUMN rollout_path TEXT;")
+        .unwrap();
+    let bad = root.parent().unwrap().join("bad.jsonl");
+    fs::write(&bad, b"malformed\n").unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES('unrelated',NULL,?1,?2)",
+        rusqlite::params![root.parent().unwrap().to_str(), bad.to_str()],
+    )
+    .unwrap();
+    drop(db);
+    let destination = root.parent().unwrap().join("unregistered archive");
+    fs::create_dir(&destination).unwrap();
+    let source = root.join("document.txt");
+    fs::write(&source, "keep exact bytes").unwrap();
+    assert!(adapter
+        .edit_files("copy", &[source.clone()], &destination, None, &Job::new())
+        .is_err());
+    for kind in ["copy", "move"] {
+        let op = adapter
+            .edit_files_to_folder(kind, &[source.clone()], &destination, &Job::new())
+            .unwrap();
+        assert_eq!(
+            fs::read(destination.join("document.txt")).unwrap(),
+            b"keep exact bytes"
+        );
+        assert_eq!(source.exists(), kind == "copy");
+        adapter.undo(&op).unwrap();
+        assert!(source.exists());
+        assert!(!destination.join("document.txt").exists());
+    }
+}
+
+#[test]
+fn sidecar_hidden_and_not_editable_as_ordinary_files() {
+    let (adapter, root) = setup();
+    let sidecar = root.join(".codex-manager");
+    fs::create_dir(&sidecar).unwrap();
+    let file = sidecar.join("current.json");
+    fs::write(&file, "keep").unwrap();
+    assert!(codex_manager_core::list_files(&root, &[root.clone()])
+        .unwrap()
+        .is_empty());
+    for source in [&sidecar, &file] {
+        for kind in ["copy", "move", "rename", "delete"] {
+            assert!(adapter
+                .edit_files(kind, &[source.clone()], &root, Some("changed"), &Job::new())
+                .is_err());
+        }
+    }
+    assert!(adapter.mkdir(&root, ".CODEX-MANAGER", &Job::new()).is_err());
+}

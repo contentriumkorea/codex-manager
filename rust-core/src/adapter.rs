@@ -414,39 +414,56 @@ impl Adapter {
         if current["status"]["type"] == "active" {
             return Err("실행 중인 대화는 변경할 수 없습니다.".into());
         }
-        // Resume of an already loaded thread can retain its additional roots.
-        // Unload only our idle session before applying an exact workspace list.
-        if self
-            .call("thread/unsubscribe", json!({"threadId":id}))
-            .is_err()
-        {
-            self.release_server();
+        let archived = thread["archived"] == true;
+        if archived {
+            self.call("thread/unarchive", json!({"threadId":id}))?;
         }
-        self.call(
-            "thread/resume",
-            json!({"threadId":id,"cwd":cwd,"runtimeWorkspaceRoots":paths}),
-        )?;
-        self.call("thread/settings/update", json!({"threadId":id,"cwd":cwd}))?;
-        self.assign(id, thread["projectId"].as_str())?;
-        let read = self.read_thread(id)?;
-        if crate::clean_path(Path::new(
-            read["cwd"].as_str().ok_or("변경한 작업 경로가 없습니다.")?,
-        )) != crate::clean_path(cwd)
-        {
-            return Err("작업 경로 변경이 저장되지 않았습니다.".into());
+        let result = (|| {
+            // Resume of an already loaded thread can retain its additional roots.
+            // Unload only our idle session before applying an exact workspace list.
+            if self
+                .call("thread/unsubscribe", json!({"threadId":id}))
+                .is_err()
+            {
+                self.release_server();
+            }
+            self.call(
+                "thread/resume",
+                json!({"threadId":id,"cwd":cwd,"runtimeWorkspaceRoots":paths}),
+            )?;
+            self.call("thread/settings/update", json!({"threadId":id,"cwd":cwd}))?;
+            self.assign(id, thread["projectId"].as_str())?;
+            let read = self.read_thread(id)?;
+            if crate::clean_path(Path::new(
+                read["cwd"].as_str().ok_or("변경한 작업 경로가 없습니다.")?,
+            )) != crate::clean_path(cwd)
+            {
+                return Err("작업 경로 변경이 저장되지 않았습니다.".into());
+            }
+            let catalog = self.snapshot()?;
+            let saved = all_threads(&catalog)
+                .into_iter()
+                .find(|t| t["id"] == id)
+                .ok_or("변경된 대화를 찾을 수 없습니다.")?;
+            let actual = runtime_roots(Path::new(
+                saved["path"].as_str().ok_or("대화 기록 경로 누락")?,
+            ))?;
+            if actual != paths {
+                return Err("작업 폴더 목록 변경이 저장되지 않았습니다.".into());
+            }
+            Ok(())
+        })();
+        if archived {
+            self.call("thread/archive", json!({"threadId":id}))
+                .map_err(|e| format!("대화 보관 상태 복구 필요: {e}"))?;
+            if !all_threads(&self.snapshot()?)
+                .iter()
+                .any(|t| t["id"] == id && t["archived"] == true)
+            {
+                return Err("대화 보관 상태가 저장되지 않았습니다.".into());
+            }
         }
-        let catalog = self.snapshot()?;
-        let saved = all_threads(&catalog)
-            .into_iter()
-            .find(|t| t["id"] == id)
-            .ok_or("변경된 대화를 찾을 수 없습니다.")?;
-        let actual = runtime_roots(Path::new(
-            saved["path"].as_str().ok_or("대화 기록 경로 누락")?,
-        ))?;
-        if actual != paths {
-            return Err("작업 폴더 목록 변경이 저장되지 않았습니다.".into());
-        }
-        Ok(())
+        result
     }
     pub(crate) fn project(&self, id: &str) -> Result<Value, String> {
         self.snapshot()?

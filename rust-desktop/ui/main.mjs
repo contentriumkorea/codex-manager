@@ -185,6 +185,7 @@ function historyLabel(r) {
       ] ?? "작업"),
     "rust-transfer": "프로젝트 폴더 이동",
     "rust-cross-store": "저장소 간 전송",
+    "rust-portable-restore": "폴더 대화 복원",
   };
   return (
     p.label ||
@@ -540,7 +541,11 @@ function renderDetails() {
     body.append(
       button("대화 열기", () => activateProject(first.id)),
       button("파일 열기", () => activateProject(first.id, "files")),
+      button("대화 자동 보관…", () => bridge.portableControls(first.project)),
     );
+    const portableStatus = node("p", "대화 보관 상태 확인 중…", "portable-status");
+    portableStatus.setAttribute("aria-live", "polite"); body.append(portableStatus);
+    bridge.portableStatus(first.project).then((text) => { portableStatus.textContent = text; }).catch((e) => { portableStatus.textContent = String(e); });
   } else if (state.mode === "history") {
     const r = first.record;
     info("처리 결과", stateLabel(r));
@@ -586,7 +591,7 @@ function renderDetails() {
       }
     }
     if (
-      r.payload.kind !== "rust-cross-store" &&
+      !["rust-cross-store", "rust-portable-restore"].includes(r.payload.kind) &&
       !r.recovered &&
       r.payload.permanent !== true
     ) {
@@ -611,7 +616,7 @@ function renderDetails() {
         ),
       );
     if (
-      !["rust-legacy", "rust-cross-store"].includes(r.payload.kind) &&
+      !["rust-legacy", "rust-cross-store", "rust-portable-restore"].includes(r.payload.kind) &&
       !["completed", "cancelled"].includes(r.state)
     )
       body.append(
@@ -633,6 +638,10 @@ function renderDetails() {
         }),
       );
     if (r.payload.destination) info("백업 위치", r.payload.destination);
+    if (r.payload.kind === "rust-portable-restore") {
+      info("대화 보관 폴더", r.payload.anchor);
+      if (!["completed", "cancelled"].includes(r.state)) body.append(button("폴더 복원 계속", () => bridge.portableResume(r), "primary"));
+    }
     if (r.payload.recovery) info("복구 사본", r.payload.recovery);
   } else if (state.mode === "files") {
     info("위치", first.path);
@@ -774,7 +783,9 @@ async function navigate(path, preserveSelection = false) {
 function openRow(row) {
   if (state.mode === "projects") activateProject(row.id).catch(showError);
   else if (state.mode === "files" && row.directory && !row.linked)
-    navigate(row.path);
+    navigate(row.path).catch(showError);
+  else if (state.mode === "files" && !row.directory && !row.linked)
+    invoke("open_file", { home: state.home, projects: [state.project], path: row.path }).catch(showError);
   else if (state.mode === "history") renderDetails();
   else if (["threads", "unassigned"].includes(state.mode))
     viewTranscript(row).catch(showError);
@@ -1856,7 +1867,7 @@ async function start() {
     state.sizes = boot.sizes ?? {};
     state.savedDestination =
       boot.settings.panes?.[bridge.pane]?.destination || "";
-    const label = bridge.pane === "left" ? "왼쪽 저장소" : "오른쪽 저장소";
+    const label = "Codex 저장소";
     el("pane-label").textContent = label;
     el("store-picker").setAttribute("aria-label", label);
     el("connect-store").setAttribute("aria-label", label + " 연결");
@@ -1871,6 +1882,7 @@ async function start() {
         render,
         reloadStores,
         performDrop,
+        openProject: activateProject,
         key: handleKey,
         setBusy: (value) => {
           state.externalBusy = value;

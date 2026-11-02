@@ -9,6 +9,12 @@ use std::{
     path::{Path, PathBuf},
 };
 pub const FILE_RECOVERY: &str = ".codex-manager-file-recovery";
+fn private_component(path: &Path) -> bool {
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        name.eq_ignore_ascii_case(FILE_RECOVERY) || name.eq_ignore_ascii_case(".codex-manager")
+    })
+}
 pub fn signature(path: &Path, job: &Job) -> Result<Value, String> {
     absolute(path)?;
     if path.is_file() {
@@ -78,6 +84,9 @@ fn within(path: &Path, root: &Path) -> bool {
 }
 pub fn list_files(directory: &Path, allowed: &[PathBuf]) -> Result<Vec<Value>, String> {
     absolute(directory)?;
+    if private_component(directory) {
+        return Err("대화 보관본과 복구 폴더는 프로젝트 관리에서 확인하세요.".into());
+    }
     if !allowed.iter().any(|root| within(directory, root)) {
         return Err("프로젝트 폴더 안에서 탐색하세요.".into());
     }
@@ -86,7 +95,7 @@ pub fn list_files(directory: &Path, allowed: &[PathBuf]) -> Result<Vec<Value>, S
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name == FILE_RECOVERY {
+        if name.eq_ignore_ascii_case(FILE_RECOVERY) || name.eq_ignore_ascii_case(".codex-manager") {
             continue;
         }
         let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
@@ -141,6 +150,7 @@ impl Adapter {
             || !valid_bundle_path(name)
             || name.contains('/')
             || name.contains(FILE_RECOVERY)
+            || name.eq_ignore_ascii_case(".codex-manager")
         {
             return Err("폴더 위치와 이름을 확인하세요.".into());
         }
@@ -162,7 +172,7 @@ impl Adapter {
             .protected_storage()
             .iter()
             .any(|p| paths_overlap(parent, p))
-            || parent.components().any(|c| c.as_os_str() == FILE_RECOVERY)
+            || private_component(parent)
         {
             return Err("보호된 폴더에는 만들 수 없습니다.".into());
         }
@@ -200,6 +210,30 @@ impl Adapter {
         name: Option<&str>,
         job: &Job,
     ) -> Result<String, String> {
+        self.edit_files_scoped(kind, sources, destination, name, false, job)
+    }
+    /// Explicit folder-picker destination; source ownership and recovery remain unchanged.
+    pub fn edit_files_to_folder(
+        &self,
+        kind: &str,
+        sources: &[PathBuf],
+        destination: &Path,
+        job: &Job,
+    ) -> Result<String, String> {
+        if !["copy", "move"].contains(&kind) {
+            return Err("폴더 전송은 복사·이동만 지원합니다.".into());
+        }
+        self.edit_files_scoped(kind, sources, destination, None, true, job)
+    }
+    fn edit_files_scoped(
+        &self,
+        kind: &str,
+        sources: &[PathBuf],
+        destination: &Path,
+        name: Option<&str>,
+        external: bool,
+        job: &Job,
+    ) -> Result<String, String> {
         job.check()?;
         self.ensure_mutation_lock()?;
         if !["copy", "move", "rename", "delete"].contains(&kind)
@@ -218,7 +252,11 @@ impl Adapter {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        let protected = crate::protected_workspaces(&catalog, job)?;
+        let protected = if kind != "copy" && sources.iter().any(|p| p.is_dir()) {
+            crate::protected_workspaces(&catalog, job)?
+        } else {
+            allowed.clone()
+        };
         if kind != "copy" && sources.iter().any(|source| source.is_dir()) {
             self.require_closed()?;
         }
@@ -228,7 +266,7 @@ impl Adapter {
             if !distinct.insert(source.to_string_lossy().to_lowercase()) {
                 return Err("중복 파일을 선택했습니다.".into());
             }
-            if source.components().any(|c| c.as_os_str() == FILE_RECOVERY)
+            if private_component(source)
                 || self
                     .protected_storage()
                     .iter()
@@ -253,17 +291,15 @@ impl Adapter {
                     .protected_storage()
                     .iter()
                     .any(|p| paths_overlap(destination, p))
-                || !allowed.iter().any(|r| within(destination, r))
-                || destination
-                    .components()
-                    .any(|c| c.as_os_str() == FILE_RECOVERY)
+                || (!external && !allowed.iter().any(|r| within(destination, r)))
+                || private_component(destination)
                 || sources.iter().any(|p| within(destination, p)))
         {
             return Err("프로젝트 안의 다른 대상 폴더를 선택하세요.".into());
         }
         if kind == "rename"
             && name.is_none_or(|name| {
-                !valid_bundle_path(name) || name.contains('/') || name.contains(FILE_RECOVERY)
+                !valid_bundle_path(name) || name.contains('/') || private_component(Path::new(name))
             })
         {
             return Err("사용할 수 없는 파일 이름입니다.".into());
@@ -316,7 +352,8 @@ impl Adapter {
                 .iter()
                 .filter(|root| within(&target, root))
                 .max_by_key(|root| root.components().count())
-                .unwrap_or(root);
+                .map(PathBuf::as_path)
+                .unwrap_or(if external { destination } else { root });
             plans.push(json!({"source":source,"sourceId":source_id,"target":target,"mode":mode,"signature":signature(source,job)?,"stage":target_root.join(FILE_RECOVERY).join(&key).join(format!("{index}-stage")),"hold":if mode=="cross_move"{Some(recovery.join(format!("{index}-hold")))}else{None},"recovery":target_root.join(FILE_RECOVERY).join(&key)}));
         }
         if plans.is_empty() {
@@ -376,8 +413,12 @@ impl Adapter {
     }
     pub(crate) fn undo_files(&self, id: &str, payload: &Value, job: &Job) -> Result<(), String> {
         job.check()?;
-        let protected = crate::protected_workspaces(&self.snapshot()?, job)?;
         let plans = payload["plans"].as_array().ok_or("파일 복구 정보 누락")?;
+        let protected = if plans.iter().any(|p| p["signature"][""].is_null()) {
+            crate::protected_workspaces(&self.snapshot()?, job)?
+        } else {
+            Vec::new()
+        };
         let events = self.journal.events(id)?;
         let intents: HashMap<_, _> = events
             .iter()

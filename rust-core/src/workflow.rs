@@ -386,7 +386,44 @@ impl Adapter {
         if paths.len() != destinations.len() || paths.is_empty() {
             return Err("원본 폴더마다 새 대상 폴더를 지정하세요.".into());
         }
-        validate_destinations(self, &paths, destinations)?;
+        // Nested registered roots travel with their outer root. Require exactly the same
+        // relative mapping, then copy and recover each physical tree only once.
+        let mut physical = Vec::new();
+        for (index, source) in paths.iter().enumerate() {
+            if paths
+                .iter()
+                .take(index)
+                .any(|p| clean_path(p) == clean_path(source))
+            {
+                return Err("같은 연결 폴더가 중복되어 있습니다.".into());
+            }
+            absolute(source)?;
+            if !source.is_dir() {
+                return Err("연결된 원본 폴더가 없습니다.".into());
+            }
+            absolute(&destinations[index])?;
+            if let Some((outer, parent)) = paths
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| *i != index && source.starts_with(p))
+                .min_by_key(|(_, p)| p.components().count())
+            {
+                let expected = destinations[outer]
+                    .join(source.strip_prefix(parent).map_err(|e| e.to_string())?);
+                if clean_path(&expected) != clean_path(&destinations[index]) {
+                    return Err(
+                        "중첩 연결 폴더는 상위 폴더 안의 같은 상대 위치로 이동하세요.".into(),
+                    );
+                }
+            } else {
+                physical.push(index);
+            }
+        }
+        let physical_destinations = physical
+            .iter()
+            .map(|i| destinations[*i].clone())
+            .collect::<Vec<_>>();
+        validate_destinations(self, &paths, &physical_destinations)?;
         let snapshot = self.snapshot()?;
         crate::connections::require_connections(&snapshot, &[id.to_owned()])?;
         for g in &snapshot.projects {
@@ -475,7 +512,9 @@ impl Adapter {
         let mut inventory = Vec::new();
         let mut directories = Vec::new();
         let mut root_records = Vec::new();
-        for (index, (source, destination)) in paths.iter().zip(destinations).enumerate() {
+        for &index in &physical {
+            let source = &paths[index];
+            let destination = &destinations[index];
             let rid = format!("root-{:02}", index + 1);
             let tree = scan_tree(source, job)?;
             for entry in &tree.files {
@@ -506,7 +545,9 @@ impl Adapter {
         let op=self.begin(json!({"kind":"rust-transfer","projects":[project],"afterProjects":[after],"threads":threads,"destinations":destinations,"recovery":recovery,"transferPlanHash":plan_hash,"clean":clean,"resources":[id]}))?;
         let result = (|| {
             let mut captured = Vec::new();
-            for (index, (source, destination)) in paths.iter().zip(destinations).enumerate() {
+            for &index in &physical {
+                let source = &paths[index];
+                let destination = &destinations[index];
                 job.check()?;
                 let tree = scan_tree(source, job)?;
                 let expected = manifest_tree(&manifest, &format!("root-{:02}", index + 1))?;
@@ -542,7 +583,9 @@ impl Adapter {
             self.sync(&[after], &HashMap::new(), &[], &[])?;
             if clean {
                 self.release_server();
-                for ((source, destination), tree) in paths.iter().zip(destinations).zip(&captured) {
+                for (&index, tree) in physical.iter().zip(&captured) {
+                    let source = &paths[index];
+                    let destination = &destinations[index];
                     self.journal.record(
                         &op,
                         "cleaning-source",

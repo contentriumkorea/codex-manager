@@ -5,12 +5,15 @@ import {
   keyboardTarget,
 } from "./pane-model.mjs";
 import { dropPlan, formatBytes, duration } from "./explorer-model.mjs";
+import { folderTransferRequest } from "./destination-model.mjs";
+import { destinationBrowser } from "./destination-ui.mjs";
+import { portableUI } from "./portable-ui.mjs";
 const el = (id) => document.getElementById(id);
 const invoke = (name, args = {}) => window.__TAURI__.core.invoke(name, args);
 const model = new PaneModel();
 const panes = new Map();
 const sizeJobs = new Map();
-const frames = { left: el("left-frame"), right: el("right-frame") };
+const frames = { left: el("left-frame") };
 let visibleJob = null,
   dialogFinish = null,
   initializing = false,
@@ -34,11 +37,11 @@ function setStatus(text) {
   el("shell-status").title = text;
 }
 function activate(pane) {
-  model.active = pane;
+  model.active = "left";
   for (const id of ["left", "right"])
     el(id + "-pane").classList.toggle("active", id === pane);
   el("active-label").textContent =
-    (pane === "left" ? "왼쪽" : "오른쪽") + " 탐색기 선택됨";
+    "메인 화면의 프로젝트·파일을 선택하세요";
 }
 function dialog(owner, title, build, ok = "확인", danger = false) {
   if (dialogFinish)
@@ -150,6 +153,8 @@ function setBusy(value) {
   for (const entry of panes.values()) entry.controller?.setBusy(value);
   el("transfer-move").disabled = value;
   el("transfer-copy").disabled = value;
+  el("destination-copy").disabled = value;
+  el("destination-move").disabled = value;
 }
 async function runVisible(owner, action, args, onProgress) {
   if (visibleJob) throw new Error("진행 중인 작업이 있습니다.");
@@ -220,188 +225,57 @@ function targetFor(pane, target = {}) {
   };
 }
 async function transfer(source, targetPane, target = {}, copy = false) {
-  if (!source || !model.validSource(source))
-    throw new Error("원본 선택이 바뀌었습니다. 다시 선택하세요.");
+  if (!source || !model.validSource(source)) throw new Error("원본 선택이 바뀌었습니다. 다시 선택하세요.");
   if (visibleJob) throw new Error("진행 중인 작업이 있습니다.");
-  const destinationPane = model.snapshot(targetPane);
-  if (!destinationPane?.home) throw new Error("대상 저장소를 연결하세요.");
-  const destination = targetFor(targetPane, target);
-  if (source.kind === "files" && !destination.projectId)
-    throw new Error("파일을 받을 대상 프로젝트의 폴더를 선택하세요.");
-  if (sameHome(source.home, destinationPane.home)) {
-    if (copy && source.kind !== "files")
-      throw new Error(
-        "같은 저장소에서는 대화 이동·프로젝트 합치기를 사용하세요. 복사는 서로 다른 저장소에서 지원합니다.",
-      );
-    const action = dropPlan(source, destination, destinationPane.home, copy);
-    if (!action) throw new Error("대상 프로젝트 또는 파일 폴더를 선택하세요.");
-    await panes.get(targetPane).controller.performDrop(action);
-    model.clipboard = null;
-    return;
-  }
-  const ticket = model.ticket(source, targetPane);
-  let plan = null,
-    requestVersion = 0,
-    previewVersion = -1;
-  const answer = await dialog(
-    source.pane,
-    "반대편 저장소로 이동·복사",
-    (body) => {
-      const sequence = dialogSequence;
-      body.append(
-        node(
-          "div",
-          `원본 저장소: ${source.home}\n대상 저장소: ${destinationPane.home}\n${source.kind === "projects" ? "프로젝트" : source.kind === "files" ? "파일" : "대화"} ${source.ids.length}개\n${(source.names ?? source.ids).join("\n")}`,
-          "summary-box",
-        ),
-      );
-      const base = field("대상 부모 폴더", destination.directory);
-      const operation = node("select");
-      operation.setAttribute("aria-label", "전송 방식");
-      for (const [value, label] of [
-        ["move", "이동"],
-        ["copy", "복사"],
-      ]) {
-        const option = node("option", label);
-        option.value = value;
-        operation.append(option);
-      }
-      operation.value = copy ? "copy" : "move";
-      const project = node("select");
-      project.setAttribute("aria-label", "대상 프로젝트");
-      const fresh = node("option", "새 프로젝트로 가져오기");
-      fresh.value = "";
-      project.append(fresh);
-      for (const p of destinationPane.projects ?? []) {
-        const option = node("option", p.name);
-        option.value = p.id;
-        project.append(option);
-      }
-      project.value = destination.projectId || "";
-      const mapping = node(
-        "div",
-        "대상 경로를 확인한 뒤 미리보기를 생성하세요.",
-        "summary-box transfer-mapping",
-      );
-      mapping.setAttribute("aria-live", "polite");
-      const warnings = node("div", "", "transfer-warning");
-      const preview = node("button", "미리보기 다시 계산");
-      preview.type = "button";
-      const invalidate = () => {
-        requestVersion++;
-        plan = null;
-        el("dialog-ok").disabled = true;
-        mapping.textContent = "변경된 조건의 미리보기를 다시 계산하세요.";
-        warnings.textContent = "";
-      };
-      for (const input of [base.input, operation, project])
-        input.addEventListener("input", invalidate);
-      const regenerate = async () => {
-        if (!model.valid(ticket))
-          throw new Error(
-            "탐색기 상태가 바뀌었습니다. 창을 닫고 다시 전송하세요.",
-          );
-        const version = requestVersion;
-        plan = null;
-        preview.disabled = true;
-        el("dialog-ok").disabled = true;
-        mapping.textContent = "파일과 대화 연결을 확인하고 있습니다.";
-        try {
-          const result = await job("cross_store_plan", {
-            home: source.home,
-            targetHome: destinationPane.home,
-            kind: source.kind,
-            ids: source.ids,
-            targetProject: project.value || null,
-            destination: base.input.value.trim(),
-            copy: operation.value === "copy",
-          });
-          if (
-            version !== requestVersion ||
-            sequence !== dialogSequence ||
-            !model.valid(ticket) ||
-            !el("dialog").open
-          )
-            return;
-          plan = result;
-          previewVersion = version;
-          mapping.textContent =
-            `프로젝트 ${result.projects?.length ?? 0}개 · 대화 ${result.threads?.length ?? 0}개\n` +
-            (result.roots ?? [])
-              .map(
-                (root) =>
-                  `${root.source}\n→ ${root.destination}${root.retainSource ? "\n  원본 파일 유지" : ""}`,
-              )
-              .join("\n\n");
-          warnings.textContent = (result.warnings ?? []).join("\n");
-          el("dialog-ok").disabled = false;
-        } finally {
-          preview.disabled = false;
-        }
-      };
-      preview.addEventListener("click", () =>
-        regenerate().catch((error) => {
-          mapping.textContent = String(error);
-          setStatus(String(error));
-        }),
-      );
-      body.append(
-        base.box,
-        node("p", "전송 방식"),
-        operation,
-        node("p", "대상 프로젝트"),
-        project,
-        preview,
-        mapping,
-        warnings,
-        node(
-          "p",
-          "이동은 대상 검증 후 원본을 정리합니다. 중단된 전송은 작업 내역에서 계속할 수 있습니다.",
-        ),
-      );
-      el("dialog-ok").disabled = true;
-      if (base.input.value)
-        queueMicrotask(() =>
-          regenerate().catch((error) => {
-            mapping.textContent = String(error);
-          }),
-        );
-      return () => {
-        if (!plan || previewVersion !== requestVersion || !model.valid(ticket))
-          throw new Error(
-            "조건이 바뀌었거나 미리보기가 없습니다. 미리보기를 다시 계산하세요.",
-          );
-        return plan;
-      };
-    },
-    "확인한 내용으로 전송",
-  );
-  if (!answer) return;
-  if (!model.valid(ticket))
-    throw new Error("탐색기 상태가 바뀌었습니다. 다시 미리보기를 확인하세요.");
-  await job("pane_preferences", {
-    pane: targetPane,
-    destination: answer.request.destination,
-  });
-  if (!model.valid(ticket))
-    throw new Error("탐색기 상태가 바뀌었습니다. 다시 미리보기를 확인하세요.");
-  panes.get(targetPane).controller.setDestination(answer.request.destination);
-  try {
-    await runVisible(source.pane, "cross_store_transfer", {
-      ...answer.request,
-      expectedRevision: answer.sourceRevision,
-      targetRevision: answer.targetRevision,
-    });
-    model.clipboard = null;
-  } finally {
-    for (const entry of panes.values()) entry.controller.render();
-  }
+  const destinationPane = model.snapshot("left");
+  if (!sameHome(source.home, destinationPane?.home)) throw new Error("현재 저장소의 항목을 선택하세요.");
+  const destination = targetFor("left", target);
+  const action = dropPlan(source, destination, destinationPane.home, copy);
+  if (!action) throw new Error("대상 프로젝트 또는 파일 폴더를 선택하세요.");
+  await panes.get("left").controller.performDrop(action);
+  model.clipboard = null;
 }
 async function transferOther(copy = false) {
-  const source = model.capture(model.active);
+  const source = model.capture("left");
   if (!source) throw new Error("옮길 항목을 먼저 선택하세요.");
-  return transfer(source, model.active === "left" ? "right" : "left", {}, copy);
+  return transferToFolder(source, copy);
 }
+async function transferToFolder(source, copy) {
+  const request = folderTransferRequest(source, destination.path(), copy);
+  if (!model.validSource(source)) throw new Error("원본 선택이 바뀌었습니다. 다시 선택하세요.");
+  let plan = null;
+  if (source.kind === "projects") plan = await job("portable_transfer_plan", request.args);
+  const accepted = await dialog("left", copy ? "대상 폴더로 복사" : "대상 폴더로 이동", (body) => {
+    body.append(node("pre", `${(source.names ?? source.ids).join("\n")}\n→ ${request.args.destination}`, "summary-box transfer-mapping"));
+    if (plan) {
+      body.append(node("p", plan.warning));
+      for (const p of plan.projects) body.append(node("pre", `${p.name} · 대화 ${p.conversationCount}개\n${p.anchor}\n→ ${p.destination}${copy ? "" : "\n" + p.destinations.join("\n")}`, "transfer-mapping"));
+    } else body.append(node("p", "기존 파일은 덮어쓰지 않습니다. 이동·복사 결과는 작업 내역에서 되돌릴 수 있습니다."));
+    return () => { if (!model.validSource(source)) throw new Error("원본 선택이 바뀌었습니다."); return true; };
+  }, copy ? "복사" : "이동");
+  if (!accepted) return;
+  if (!model.validSource(source)) throw new Error("원본 선택이 바뀌었습니다.");
+  if (plan) request.args.expectedRevision = plan.revision;
+  await runVisible("left", request.action, request.args);
+  model.clipboard = null;
+  await destination.refresh();
+}
+const destination = destinationBrowser({ element: el, invoke, job, error: showError, transfer: transferOther });
+const portable = portableUI({ dialog, job, run: runVisible, invoke, node, snapshot: () => model.snapshot("left"), error: showError, element: el });
+function showSplit(enabled) {
+  el("explorers").classList.toggle("split", enabled);
+  el("right-pane").hidden = !enabled; el("splitter").hidden = !enabled;
+  el("split-toggle").setAttribute("aria-pressed", String(enabled));
+  el("split-toggle").setAttribute("aria-label", enabled ? "분할 화면 닫기" : "분할 화면 열기");
+  el("split-toggle").title = enabled ? "분할 화면 닫기" : "분할 화면 열기";
+}
+el("split-toggle").addEventListener("click", async () => {
+  const enabled = el("split-toggle").getAttribute("aria-pressed") !== "true";
+  try { await job("layout_preferences", { enabled }); showSplit(enabled); } catch (e) { showError(e); }
+});
+el("global-open-folder").addEventListener("click", async () => {
+  try { const result = await portable.openFolder(); if (result?.projectId) await panes.get("left")?.controller?.openProject(result.projectId, "files"); } catch (e) { showError(e); }
+});
 const sharedIds = new Set([
   "progress",
   "progress-phase",
@@ -482,12 +356,10 @@ window.codexPaneBridge = Object.freeze({
         return source ? transfer(source, pane, {}, source.copy) : undefined;
       },
       transferOther: (copy) =>
-        transfer(
-          model.capture(pane),
-          pane === "left" ? "right" : "left",
-          {},
-          copy,
-        ),
+        transferToFolder(model.capture(pane), copy),
+      portableControls: (project) => portable.controls(project),
+      portableStatus: (project) => portable.summary(project),
+      portableResume: (record) => runVisible("left", "portable_restore", { home: record.payload.home, anchor: record.payload.anchor, namespace: record.payload.namespace, target: record.payload.target || null, resume: record.id }),
       conclude: (record) => concludeTransfer(pane, record),
       resume: (record) =>
         runVisible(pane, "cross_store_resume", {
@@ -553,20 +425,23 @@ async function concludeTransfer(pane, record) {
 async function initialize() {
   if (
     initializing ||
-    panes.size !== 2 ||
+    panes.size !== 1 ||
     [...panes.values()].some((p) => !p.controller)
   )
     return;
   initializing = true;
   const primary = panes.get("left");
   el("version").textContent = primary.boot.version;
+  showSplit(primary.boot.settings?.split_view === true);
   await invoke("ready");
   window.__TAURI__.event.listen("close-blocked", (event) =>
     showError(event.payload),
   );
   await primary.controller.startGlobals(primary.boot);
+  const path = primary.boot.settings?.panes?.right?.destination;
+  if (path) destination.navigate(path).catch((e) => setStatus(String(e)));
 }
-for (const pane of ["left", "right"]) frames[pane].src = "pane.html";
+frames.left.src = "pane.html";
 for (const [id, action] of [
   ["global-import", "import"],
   ["global-history", "history"],

@@ -10,7 +10,7 @@ const start = source.indexOf(
   '    if (r.payload.kind === "rust-cross-store") {',
 );
 const end = source.indexOf(
-  '    if (\n      r.payload.kind !== "rust-cross-store"',
+  '    if (\n      !["rust-cross-store", "rust-portable-restore"]',
   start,
 );
 assert.ok(start >= 0 && end > start);

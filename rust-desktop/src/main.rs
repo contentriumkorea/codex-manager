@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod instance;
+mod job_gate;
+mod portable_fingerprint;
 mod runtime_setup;
 mod service;
 mod shell;
@@ -68,12 +70,15 @@ async fn select_home(
         .map_err(|_| "저장소를 연결하지 못했습니다.")?
 }
 #[tauri::command]
-fn start_job(
+async fn start_job(
     service: State<'_, Arc<Service>>,
     action: String,
     args: Value,
 ) -> Result<String, String> {
-    service.inner().start(action, args)
+    let s = Arc::clone(&service);
+    tauri::async_runtime::spawn_blocking(move || s.start(action, args))
+        .await
+        .map_err(|_| "작업을 시작하지 못했습니다.")?
 }
 #[tauri::command]
 fn job_status(service: State<'_, Arc<Service>>, id: String) -> Result<Value, String> {
@@ -112,6 +117,18 @@ async fn transcript(
     tauri::async_runtime::spawn_blocking(move || s.transcript(&home, &id))
         .await
         .map_err(|_| "대화를 읽지 못했습니다.")?
+}
+#[tauri::command]
+async fn open_file(
+    service: State<'_, Arc<Service>>,
+    home: String,
+    projects: Vec<String>,
+    path: String,
+) -> Result<(), String> {
+    let s = Arc::clone(&service);
+    tauri::async_runtime::spawn_blocking(move || s.open_file(&home, &projects, &path))
+        .await
+        .map_err(|_| "파일을 열지 못했습니다.")?
 }
 #[tauri::command]
 async fn choose_folder(initial: Option<String>) -> Result<Option<String>, String> {
@@ -240,6 +257,7 @@ fn main() {
         .manage(service)
         .setup(|app| {
             let service = app.state::<Arc<Service>>();
+            service.start_automatic_loop();
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(monitor) = window.current_monitor()? {
                     let scale = monitor.scale_factor();
@@ -325,6 +343,7 @@ fn main() {
             history,
             file_list,
             transcript,
+            open_file,
             choose_folder,
             ready,
             apply_update,

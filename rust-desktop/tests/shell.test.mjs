@@ -9,6 +9,7 @@ import {
   keyboardTarget,
 } from "../ui/pane-model.mjs";
 import { dropPlan, formatBytes, duration } from "../ui/explorer-model.mjs";
+import { folderTransferRequest } from "../ui/destination-model.mjs";
 class Element {
   constructor(tag = "div") {
     this.tagName = tag;
@@ -31,6 +32,7 @@ class Element {
   setAttribute(key, value) {
     this.attributes[key] = String(value);
   }
+  getAttribute(key) { return this.attributes[key]; }
   removeAttribute(key) {
     delete this.attributes[key];
   }
@@ -80,8 +82,10 @@ function harness() {
               elapsed: 1,
               phase: "done",
               result:
-                request.action === "cross_store_plan"
+                request.action === "portable_transfer_plan"
                   ? {
+                      revision: "source-r",
+                      warning: "whole folder transfer",
                       request: request.args,
                       sourceRevision: "source-r",
                       targetRevision: "target-r",
@@ -124,7 +128,7 @@ function harness() {
   };
   const calls = [],
     jobs = new Map();
-  for (const id of ["left", "right"]) {
+  for (const id of ["left"]) {
     const frame = document.getElementById(id + "-frame");
     frame.contentWindow = {};
     Object.defineProperty(frame, "src", {
@@ -147,6 +151,9 @@ function harness() {
     dropPlan,
     formatBytes,
     duration,
+    folderTransferRequest,
+    destinationBrowser: () => ({path: () => "E:/archive", refresh: async () => {}, navigate: async () => {}}),
+    portableUI: () => ({openFolder: async () => {}, controls: async () => {}}),
     setTimeout,
     queueMicrotask,
     console,
@@ -158,7 +165,7 @@ function harness() {
   vm.runInNewContext(source, context);
   const controllers = {},
     api = {};
-  for (const id of ["left", "right"]) {
+  for (const id of ["left"]) {
     api[id] = window.codexPaneBridge.register(
       document.getElementById(id + "-frame").contentWindow,
     );
@@ -194,173 +201,49 @@ const flush = async () => {
   for (let i = 0; i < 8; i++)
     await new Promise((resolve) => setImmediate(resolve));
 };
-test("bridge registers exact frame windows, injects independent pane identity and initializes globals once", async () => {
+test("single main frame rejects unregistered windows and initializes globals once", async () => {
   const h = harness();
   assert.throws(() => h.window.codexPaneBridge.register({}));
-  assert.throws(() =>
-    h.window.codexPaneBridge.register(
-      h.document.getElementById("left-frame").contentWindow,
-    ),
-  );
-  await h.api.right.invoke("bootstrap", { pane: "left" });
-  await h.api.left.invoke("select_home", { home: "A", pane: "right" });
+  assert.throws(() => h.window.codexPaneBridge.register(h.document.getElementById("left-frame").contentWindow));
+  await h.api.left.invoke("select_home", {home:"A",pane:"right"});
   await flush();
-  assert.equal(h.calls.find((c) => c.name === "bootstrap").args.pane, "right");
-  assert.equal(h.calls.find((c) => c.name === "select_home").args.pane, "left");
-  assert.equal(h.calls.filter((c) => c.name === "ready").length, 1);
+  assert.equal(h.calls.find(c=>c.name==="select_home").args.pane,"left");
+  assert.equal(h.calls.filter(c=>c.name==="ready").length,1);
+  assert.equal(h.document.getElementById("split-toggle").getAttribute("aria-pressed"),"false");
+  assert.equal(h.document.getElementById("right-pane").hidden,true);
 });
-test("cross-pane copy previews pinned source home and commits only returned revisions", async () => {
-  const h = harness();
-  h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B", []));
-  h.api.left.activate();
-  h.api.left.copy(false);
-  h.api.right.activate();
-  const pending = h.api.right.paste();
-  await flush();
-  const preview = h.calls.find((c) => c.args?.action === "cross_store_plan");
-  assert.equal(preview.args.args.home, "A");
-  assert.equal(preview.args.args.targetHome, "B");
-  assert.equal(preview.args.args.copy, true);
-  assert.equal(
-    h.calls.some((c) => c.args?.action === "cross_store_transfer"),
-    false,
-  );
-  await h.document.getElementById("dialog-form").fire("submit");
-  await pending;
-  const commit = h.calls.find((c) => c.args?.action === "cross_store_transfer");
-  assert.equal(commit.args.args.expectedRevision, "source-r");
-  assert.equal(commit.args.args.targetRevision, "target-r");
-  assert.equal(commit.args.args.home, "A");
+test("split toggle persists choice and labels without a second catalog", async () => {
+  const h=harness(); await flush();
+  await h.document.getElementById("split-toggle").fire("click");
+  assert.equal(h.document.getElementById("right-pane").hidden,false);
+  assert.equal(h.document.getElementById("split-toggle").getAttribute("aria-label"),"분할 화면 닫기");
+  assert.equal(h.calls.find(c=>c.args?.action==="layout_preferences").args.args.enabled,true);
 });
-test("source/target changes invalidate visible preview and cannot execute an obsolete commit", async () => {
-  const h = harness();
-  h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B", []));
-  const pending = h.api.left.transferOther(false);
-  await flush();
-  h.api.right.publish({ ...snapshot("B", []), directory: "changed" });
-  await h.document.getElementById("dialog-form").fire("submit");
-  assert.equal(
-    h.calls.some((c) => c.args?.action === "cross_store_transfer"),
-    false,
-  );
-  assert.match(
-    h.document.getElementById("dialog-error").textContent,
-    /変|바뀌|미리보기/,
-  );
-  h.document.getElementById("dialog-cancel").onclick();
-  await pending;
+test("project copy previews exact folder destination and commits the preview revision",async()=>{
+  const h=harness();h.api.left.publish(snapshot("A"));
+  const pending=h.api.left.transferOther(true); await flush();
+  assert.equal(h.calls.some(c=>c.args?.action==="portable_transfer"),false);
+  await h.document.getElementById("dialog-form").fire("submit"); await pending;
+  const call=h.calls.find(c=>c.args?.action==="portable_transfer");
+  assert.equal(call.args.args.destination,"E:/archive");
+  assert.equal(call.args.args.expectedRevision,"source-r");
+  assert.equal(call.args.args.copy,true);
 });
-test("forged drag is refused and interrupted transfer refreshes both affected homes", async () => {
-  const h = harness();
-  h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B", []));
-  await assert.rejects(h.api.right.drop("forged", {}, false), /선택/);
-  const refreshed = [];
-  h.controllers.left.refresh = async () => refreshed.push("left");
-  h.controllers.right.refresh = async () => refreshed.push("right");
-  h.window.__TAURI__.core.invoke = async (name, args) => {
-    if (name === "start_job") return "failed-job";
-    if (name === "job_status")
-      return { state: "cancelled", error: "cancelled" };
-  };
-  await assert.rejects(
-    h.api.left.runVisible("cross_store_transfer", {
-      home: "A",
-      targetHome: "B",
-    }),
-    /cancelled/,
-  );
-  assert.deepEqual(refreshed.sort(), ["left", "right"]);
-});
-test("late preview cannot enable confirmation in a newer global dialog", async () => {
-  const h = harness();
-  h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B", []));
-  const original = h.window.__TAURI__.core.invoke;
-  let resolvePlan;
-  h.window.__TAURI__.core.invoke = async (name, args) => {
-    if (name === "start_job" && args.action === "cross_store_plan")
-      return "slow-plan";
-    if (name === "job_status" && args.id === "slow-plan")
-      return new Promise((resolve) => {
-        resolvePlan = resolve;
-      });
-    return original(name, args);
-  };
-  const pending = h.api.left.transferOther(false);
-  await flush();
-  h.document.getElementById("dialog-cancel").onclick();
-  await pending;
-  const newer = h.api.right.dialog("new dialog", () => {
-    h.document.getElementById("dialog-ok").disabled = true;
-    return () => true;
-  });
-  resolvePlan({
-    state: "completed",
-    result: {
-      request: {},
-      sourceRevision: "a",
-      targetRevision: "b",
-      roots: [],
-    },
-  });
-  await flush();
-  assert.equal(h.document.getElementById("dialog-ok").disabled, true);
-  h.document.getElementById("dialog-cancel").onclick();
-  await newer;
-});
-test("matching-home background size jobs are shared without taking visible progress", async () => {
-  const h = harness();
-  let complete;
-  const original = h.window.__TAURI__.core.invoke;
-  h.window.__TAURI__.core.invoke = async (name, args) => {
-    if (name === "start_job" && args.action === "sizes") {
-      h.calls.push({ name, args });
-      return "sizes";
-    }
-    if (name === "job_status" && args.id === "sizes")
-      return new Promise((resolve) => {
-        complete = resolve;
-      });
-    return original(name, args);
-  };
-  const first = h.api.left.sizes("C:/Store/");
-  const second = h.api.right.sizes("c:\\store");
-  await flush();
-  assert.equal(h.calls.filter((c) => c.args?.action === "sizes").length, 1);
-  complete({ state: "completed", result: { p: { bytes: 10 } } });
-  assert.deepEqual(await first, await second);
-  assert.equal(h.document.getElementById("progress-phase").textContent, "");
-});
-test("store changes while saving destination cannot commit the earlier preview", async () => {
-  const h = harness();
-  h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B", []));
-  const original = h.window.__TAURI__.core.invoke;
-  let save;
-  h.window.__TAURI__.core.invoke = async (name, args) => {
-    if (name === "start_job" && args.action === "pane_preferences")
-      return "slow-save";
-    if (name === "job_status" && args.id === "slow-save")
-      return new Promise((resolve) => {
-        save = resolve;
-      });
-    return original(name, args);
-  };
-  const pending = h.api.left.transferOther(false);
-  const rejection = assert.rejects(pending, /바뀌/);
-  await flush();
-  await h.document.getElementById("dialog-form").fire("submit");
-  await flush();
+test("changed main selection prevents committing a stale destination preview",async()=>{
+  const h=harness();h.api.left.publish(snapshot("A"));
+  const pending=h.api.left.transferOther(false);await flush();
   h.api.left.publish(snapshot("Other"));
-  save({ state: "completed", result: {} });
-  await rejection;
-  assert.equal(
-    h.calls.some((c) => c.args?.action === "cross_store_transfer"),
-    false,
-  );
+  await h.document.getElementById("dialog-form").fire("submit");
+  assert.equal(h.document.getElementById("dialog-error").hidden,false);
+  h.document.getElementById("dialog-cancel").onclick();await pending;
+  assert.equal(h.calls.some(c=>c.args?.action==="portable_transfer"),false);
+});
+test("file destination transfer uses narrowly scoped external folder action",async()=>{
+  const h=harness();h.api.left.publish({...snapshot("A",["A/project/file"]),mode:"files"});
+  const pending=h.api.left.transferOther(false);await flush();
+  await h.document.getElementById("dialog-form").fire("submit");await pending;
+  const call=h.calls.find(c=>c.args?.action==="files_to_folder");
+  assert.equal(call.args.args.kind,"move");assert.deepEqual(call.args.args.sources,["A/project/file"]);
 });
 test("native ready is reported once while first-run legal consent remains unresolved", async () => {
   const h = harness();
@@ -390,7 +273,6 @@ test("native ready is reported once while first-run legal consent remains unreso
 test("safe conclusion previews retained paths and unavailable originals, then commits exact preview revision", async () => {
   const h = harness();
   h.api.left.publish(snapshot("A"));
-  h.api.right.publish(snapshot("B"));
   const pending = h.api.left.conclude({
     id: "operation",
     payload: { sourceHome: "A", targetHome: "B" },
@@ -428,7 +310,7 @@ test("safe conclusion previews retained paths and unavailable originals, then co
 });
 test("cancelling safe conclusion preview never mutates either store", async () => {
   const h = harness();
-  const pending = h.api.right.conclude({
+  const pending = h.api.left.conclude({
     id: "operation",
     payload: { sourceHome: "A", targetHome: "B" },
   });

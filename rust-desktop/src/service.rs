@@ -1,4 +1,5 @@
 use codex_manager_core::*;
+mod portable;
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
@@ -20,7 +21,8 @@ pub struct Service {
     pub journal: Journal,
     settings: Mutex<Value>,
     jobs: Mutex<HashMap<String, Job>>,
-    active: Mutex<Option<String>>,
+    gate: crate::job_gate::JobGate,
+    job_order: Mutex<VecDeque<String>>,
     pub _instance: fs::File,
     pub _legacy_instance: crate::instance::LegacyLock,
     pub updater: crate::updater::Updater,
@@ -85,7 +87,8 @@ impl Service {
             journal,
             settings: Mutex::new(settings),
             jobs: Mutex::new(HashMap::new()),
-            active: Mutex::new(None),
+            gate: crate::job_gate::JobGate::default(),
+            job_order: Mutex::new(VecDeque::new()),
             _instance: instance,
             _legacy_instance: legacy,
             updater: crate::updater::Updater::new(),
@@ -411,6 +414,14 @@ impl Service {
         Ok(())
     }
     pub fn start(self: &Arc<Self>, action: String, args: Value) -> Result<String, String> {
+        self.start_kind(action, args, false)
+    }
+    fn start_kind(
+        self: &Arc<Self>,
+        action: String,
+        args: Value,
+        automatic: bool,
+    ) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let readonly = [
             "connection_plan",
@@ -422,22 +433,42 @@ impl Service {
             "verify_backup",
             "update_check",
             "update_prepare",
+            "portable_status",
+            "portable_discover",
+            "portable_inspect",
+            "portable_plan",
+            "portable_transfer_plan",
+            "folder_list",
+            "layout_preferences",
         ]
         .contains(&action.as_str());
-        if !readonly {
-            let mut active = self.active.lock().map_err(|_| "작업 잠금 오류")?;
-            if active.is_some() {
-                return Err(
-                    "진행 중인 작업이 있습니다. 완료하거나 취소한 뒤 다시 시도하세요.".into(),
-                );
-            }
-            *active = Some(id.clone());
-        }
         let job = Job::new();
+        if !readonly {
+            self.gate.begin(&id, &job, automatic)?;
+        }
         self.jobs
             .lock()
             .map_err(|_| "작업 잠금 오류")?
             .insert(id.clone(), job.clone());
+        {
+            let mut order = self.job_order.lock().map_err(|_| "작업 잠금 오류")?;
+            order.push_back(id.clone());
+            let mut jobs = self.jobs.lock().map_err(|_| "작업 잠금 오류")?;
+            let excess = order.len().saturating_sub(128);
+            for _ in 0..excess {
+                if let Some(old) = order.pop_front() {
+                    if jobs
+                        .get(&old)
+                        .is_some_and(|j| j.snapshot()["state"] == "running")
+                    {
+                        order.push_back(old);
+                    } else {
+                        jobs.remove(&old);
+                    }
+                }
+            }
+        }
+        let worker_id = id.clone();
         let service = Arc::clone(self);
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -448,16 +479,14 @@ impl Service {
             });
             job.finish(result);
             if !readonly {
-                if let Ok(mut active) = service.active.lock() {
-                    *active = None;
-                }
+                service.gate.finish(&worker_id);
             }
         });
         Ok(id)
     }
     fn run(&self, action: &str, args: &Value, job: &Job) -> Result<Value, String> {
         if let Some(root) = &self.options.test_root {
-            for key in ["path", "destination", "bundle"] {
+            for key in ["path", "destination", "bundle", "anchor"] {
                 if let Some(path) = args[key].as_str() {
                     if !clean_path(Path::new(path)).starts_with(clean_path(root)) {
                         return Err("시험 작업의 경로가 시험 범위 밖에 있습니다.".into());
@@ -477,6 +506,21 @@ impl Service {
             }
         }
         match action {
+            "layout_preferences" => {
+                self.save(json!({"split_view":args["enabled"].as_bool().unwrap_or(false)}))?;
+                return Ok(json!({}));
+            }
+            "folder_list" => return self.destination_folders(str_arg(args, "path")?),
+            "portable_discover" => {
+                return portable_discover(Path::new(str_arg(args, "path")?), 8, 5000, job)
+            }
+            "portable_inspect" => {
+                return portable_inspect(
+                    Path::new(str_arg(args, "anchor")?),
+                    str_arg(args, "namespace")?,
+                    job,
+                )
+            }
             "pane_preferences" => {
                 let pane = str_arg(args, "pane")?;
                 Self::pane(Some(pane))?;
@@ -586,6 +630,9 @@ impl Service {
         }
         let home = str_arg(args, "home")?;
         let mut adapter = self.adapter(home)?;
+        if action.starts_with("portable_") {
+            return self.portable_action(action, args, &mut adapter, job);
+        }
         if [
             "cross_store_conclude_plan",
             "cross_store_plan",
@@ -814,6 +861,12 @@ impl Service {
                 args["name"].as_str(),
                 job,
             )?,
+            "files_to_folder" => adapter.edit_files_to_folder(
+                str_arg(args, "kind")?,
+                &paths(args, "sources")?,
+                Path::new(str_arg(args, "destination")?),
+                job,
+            )?,
             "mkdir" => adapter.mkdir(
                 Path::new(str_arg(args, "destination")?),
                 str_arg(args, "name")?,
@@ -830,11 +883,7 @@ impl Service {
         Ok(json!({"operationId":op}))
     }
     pub fn apply_update(&self) -> Result<(), String> {
-        let mut active = self.active.lock().map_err(|_| "작업 잠금 오류")?;
-        if active.is_some() {
-            return Err("파일 관리 작업이 끝난 뒤 업데이트하세요.".into());
-        }
-        *active = Some("updating".into());
+        self.gate.stop()?;
         for job in self.jobs.lock().map_err(|_| "작업 잠금 오류")?.values() {
             if job.snapshot()["state"] == "running" {
                 job.cancel();
@@ -842,12 +891,12 @@ impl Service {
         }
         let result = self.updater.apply(&self.options.data);
         if result.is_err() {
-            *active = None;
+            self.gate.resume();
         }
         result
     }
     pub fn can_close(&self) -> bool {
-        self.active.lock().is_ok_and(|a| a.is_none())
+        self.gate.stop().is_ok()
     }
 }
 fn chrono_now() -> u64 {
