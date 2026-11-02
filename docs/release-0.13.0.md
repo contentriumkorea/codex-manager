@@ -15,4 +15,4 @@
 
 기존 경량 설치파일을 계속 사용할 수 있습니다. **프로그램 포터블 ZIP**은 실행용이며, 작업을 이전할 때는 대화가 보관된 프로젝트 폴더를 함께 복사하세요.
 
-[사용 안내](user-guide.md) · [호환성과 검증 범위](compatibility.md)
+[사용 안내](https://github.com/contentriumkorea/codex-manager/blob/main/docs/user-guide.md) · [호환성과 검증 범위](https://github.com/contentriumkorea/codex-manager/blob/main/docs/compatibility.md)
