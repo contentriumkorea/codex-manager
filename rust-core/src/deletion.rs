@@ -132,3 +132,108 @@ impl Adapter {
         Ok(report)
     }
 }
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use crate::Journal;
+    use std::{fs, path::PathBuf};
+
+    fn import_fixture(a: &mut Adapter, root: &Path, id: &str, parent: Option<&str>) {
+        let source = parent.map(|p| json!({"subagent":{"thread_spawn":{"parent_thread_id":p,"depth":1,"agent_nickname":"fixture","agent_role":"default"}}})).unwrap_or(json!("cli"));
+        let meta = json!({"timestamp":"2026-11-02T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-11-02T00:00:00Z","cwd":root,"runtime_workspace_roots":[root],"originator":"codex_cli_rs","cli_version":"0.0.0","source":source,"model_provider":"openai"}});
+        let event = json!({"timestamp":"2026-11-02T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"fictional fixture","images":[],"local_images":[],"text_elements":[]}});
+        let path = root.join(format!("{id}.jsonl"));
+        fs::write(&path, format!("{meta}\n{event}\n")).unwrap();
+        a.import_thread(&path, id, root, &[root.to_owned()], "", "Fixture")
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "installed SDK with isolated home only"]
+    fn in_flight_descendant_cannot_expand_batch_delete_authorization() {
+        for protected in [false, true] {
+            let root = PathBuf::from(std::env::var_os("CODEX_TEST_HOME").unwrap())
+                .join(format!("in-flight-descendant-{protected}"));
+            assert!(!root.exists());
+            fs::create_dir_all(root.join("home")).unwrap();
+            let mut a = Adapter::isolated(
+                resolve_store(&root.join("home")).unwrap(),
+                PathBuf::from(std::env::var_os("CODEX_TEST_BINARY").unwrap()),
+                Journal::open(&root.join("manager/journal.sqlite")).unwrap(),
+            )
+            .unwrap();
+            let p = "00000000-0000-4000-8000-000000000201";
+            let u = "00000000-0000-4000-8000-000000000202";
+            let x = "00000000-0000-4000-8000-000000000203";
+            for id in [p, u] {
+                import_fixture(&mut a, &root, id, None);
+            }
+            let mut calls = 0;
+            let result = a.delete_checked(
+                &[],
+                &[p.into(), u.into()],
+                false,
+                &Job::new(),
+                true,
+                &mut |a| {
+                    calls += 1;
+                    if calls == 2 {
+                        // Initial authorization and all recovery copies already exist;
+                        // P's native RPC has completed. Insert X inside this same batch.
+                        assert!(!all_threads(&a.snapshot()?).iter().any(|t| t["id"] == p));
+                        import_fixture(a, &root, x, Some(u));
+                        if protected {
+                            fs::write(
+                                a.store.home.join(".codex-global-state.json"),
+                                json!({"projectless-thread-ids":[x]}).to_string(),
+                            )
+                            .unwrap();
+                        }
+                    }
+                    Ok(())
+                },
+            );
+            let error = result.expect_err("a new descendant must stop the in-flight batch");
+            assert!(
+                error.contains(if protected {
+                    "명시적으로"
+                } else {
+                    "승인하지 않은"
+                }),
+                "{error}"
+            );
+            assert_eq!(calls, 2);
+            let threads = all_threads(&a.snapshot().unwrap());
+            assert!(!threads.iter().any(|t| t["id"] == p));
+            assert!(threads.iter().any(|t| t["id"] == u));
+            let child = threads
+                .iter()
+                .find(|t| t["id"] == x)
+                .expect("unapproved X must survive");
+            assert_eq!(child["parentThreadId"], u);
+            assert_eq!(child["internal"], true);
+            let history = a.journal.history().unwrap();
+            let deletion = history
+                .iter()
+                .find(|r| r["payload"]["kind"] == "rust-delete")
+                .unwrap();
+            assert_eq!(deletion["state"], "needs_recovery");
+            for key in ["threads", "saved"] {
+                let records = deletion["payload"][key].as_array().unwrap();
+                assert_eq!(records.len(), 2);
+                assert!(records.iter().all(|t| t["id"] == p || t["id"] == u));
+            }
+            let saved = deletion["payload"]["saved"].as_array().unwrap();
+            let recovery = Path::new(saved[0]["path"].as_str().unwrap())
+                .parent()
+                .unwrap();
+            assert!(!recovery.join(format!("{x}.jsonl")).exists());
+            let events = a.journal.events(deletion["id"].as_str().unwrap()).unwrap();
+            let deleting: Vec<_> = events.iter().filter(|e| e["phase"] == "deleting").collect();
+            assert_eq!(deleting.len(), 1);
+            assert_eq!(deleting[0]["payload"]["threadId"], p);
+            a.release_server();
+        }
+    }
+}

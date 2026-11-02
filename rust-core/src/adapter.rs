@@ -741,10 +741,23 @@ impl Adapter {
             for (i, id) in ids.iter().enumerate() {
                 job.check()?;
                 before_each(self)?;
-                if !all_threads(&self.snapshot()?)
-                    .iter()
-                    .any(|t| t["id"] == *id)
-                {
+                let current = all_threads(&self.snapshot()?);
+                if exact_selection {
+                    // Earlier RPCs may cascade approved children, while another
+                    // writer may add descendants after recovery copies or the
+                    // callback. Revalidate the remaining original authorization;
+                    // never add new dependencies to this deletion plan.
+                    let authorized = ids
+                        .iter()
+                        .filter(|id| current.iter().any(|t| t["id"] == **id))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let expanded = crate::expand_thread_ids(&current, &authorized)?;
+                    if expanded != authorized {
+                        return Err("미리보기에서 승인하지 않은 대화 의존성이 생겼습니다. 원본을 유지합니다.".into());
+                    }
+                }
+                if !current.iter().any(|t| t["id"] == *id) {
                     continue;
                 }
                 self.journal
