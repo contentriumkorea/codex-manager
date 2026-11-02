@@ -338,3 +338,27 @@ test("store changes while saving destination cannot commit the earlier preview",
     false,
   );
 });
+test("native ready is reported once while first-run legal consent remains unresolved", async () => {
+  const h = harness();
+  let resolveConsent,
+    consentStarted = false,
+    consentFinished = false;
+  h.controllers.left.startGlobals = async () => {
+    consentStarted = true;
+    await new Promise((resolve) => {
+      resolveConsent = resolve;
+    });
+    consentFinished = true;
+  };
+  await flush();
+  assert.equal(consentStarted, true);
+  assert.equal(consentFinished, false);
+  assert.equal(h.calls.filter((call) => call.name === "ready").length, 1);
+  h.api.left.ready(h.controllers.left, { version: "test" });
+  await flush();
+  assert.equal(h.calls.filter((call) => call.name === "ready").length, 1);
+  assert.equal(consentFinished, false);
+  resolveConsent();
+  await flush();
+  assert.equal(consentFinished, true);
+});
