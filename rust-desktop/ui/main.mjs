@@ -1587,7 +1587,10 @@ function handleKey(event) {
   if (event.isComposing) return;
   if (bridge.dialogOpen()) return;
   const typing =
-    event.target instanceof HTMLInputElement ||
+    (event.target instanceof HTMLInputElement &&
+      !["checkbox", "radio", "button", "submit", "reset", "image"].includes(
+        event.target.type,
+      )) ||
     event.target instanceof HTMLTextAreaElement ||
     event.target instanceof HTMLSelectElement ||
     event.target.isContentEditable;

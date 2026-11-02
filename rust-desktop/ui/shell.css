@@ -89,7 +89,7 @@ body {
   margin: 8px 18px;
   flex: none;
 }
-.shell dialog {
+body > #dialog {
   max-width: 900px;
   width: min(860px, 92vw);
 }
