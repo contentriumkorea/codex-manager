@@ -6,7 +6,7 @@ use crate::{
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Seek, SeekFrom, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -77,25 +77,18 @@ pub fn prepare_rollout_with_job(
         absolute(path)?;
     }
     uuid::Uuid::parse_str(id).map_err(|_| "대화 ID 형식 오류")?;
-    let locked = read_locked(source)?;
-    let before = locked.metadata().map_err(|e| e.to_string())?;
-    let hash = digest(source, job)?;
+    let mut reader = crate::RolloutReader::open(source, Some(id), job)?;
+    let size = reader.raw_size();
+    let hash = reader.raw_sha256().to_owned();
     if expected.is_some_and(|expected| !hash.eq_ignore_ascii_case(expected)) {
         return Err("검증 이후 백업 대화가 변경됐습니다.".into());
     }
-    let mut reader = BufReader::new(locked);
     let mut context = None;
     let mut environment = None;
     let mut settings = None;
     let mut count = 0;
-    let mut line = String::new();
-    loop {
-        job.check()?;
-        line.clear();
-        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            break;
-        }
-        let item: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    while let Some(record) = reader.next_record()? {
+        let item = record.value;
         if count == 0
             && (item["type"] != "session_meta"
                 || item["payload"]["id"] != id
@@ -127,21 +120,20 @@ pub fn prepare_rollout_with_job(
     if count == 0 {
         return Err("대화 기록이 비어 있습니다.".into());
     }
-    reader.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    let mut reader = crate::RolloutReader::open(source, Some(id), job)?;
+    if reader.raw_sha256() != hash {
+        return Err("Rollout changed between reads".into());
+    }
     let target = rollout_target(home, id)?;
     let temporary =
         target.with_file_name(format!(".manager-import-{}.partial", uuid::Uuid::new_v4()));
     let mut output = PartialFile::create(&temporary)?;
-    job.phase("대화 이식 파일 준비", before.len());
+    job.phase("대화 이식 파일 준비", size);
     let mut done = 0;
     let mut index = 0;
-    loop {
-        job.check()?;
-        line.clear();
-        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
+    while let Some(record) = reader.next_record()? {
+        let line = record.line;
+        let n = line.len();
         if index == 0
             || Some(index) == context
             || Some(index) == settings
@@ -171,7 +163,7 @@ pub fn prepare_rollout_with_job(
         job.advance(done, &source.to_string_lossy(), n as u64);
         index += 1;
     }
-    if index != count || digest(source, job)? != hash {
+    if index != count || reader.raw_sha256() != hash {
         return Err("대화 이식 파일을 준비하는 동안 원본이 변경됐습니다.".into());
     }
     job.check()?;
@@ -222,10 +214,22 @@ impl Adapter {
                 .ok_or("대화 기록 경로가 없습니다.")?,
         );
         self.checked_rollout_path(path)?;
+        if !path.exists() && !path.with_extension("jsonl.zst").exists() {
+            return Ok(false);
+        }
+        let resolved = crate::resolve_rollout_path(path)?;
+        let path = resolved.as_path();
         let planned = Path::new(owner["path"].as_str().ok_or("가져오기 파일 계획 누락")?);
-        if key(path) != key(planned)
+        let logical = |p: &Path| {
+            if p.extension().is_some_and(|e| e == "zst") {
+                p.with_extension("")
+            } else {
+                p.to_owned()
+            }
+        };
+        if key(&logical(path)) != key(&logical(planned))
             && !(within(path, &self.store.home.join("archived_sessions"))
-                && path.file_name() == planned.file_name())
+                && logical(path).file_name() == logical(planned).file_name())
         {
             return Ok(false);
         }
@@ -239,7 +243,12 @@ impl Adapter {
             return Ok(true);
         }
         if let Some(hash) = owner["derivedSha256"].as_str() {
-            return digest(path, job).map(|actual| actual == hash);
+            if digest(path, job)? == hash {
+                return Ok(true);
+            }
+        }
+        if let Some(hash) = owner["decodedSha256"].as_str() {
+            return crate::decoded_rollout_digest(path, job).map(|actual| actual == hash);
         }
         Ok(false)
     }
@@ -341,7 +350,7 @@ impl Adapter {
             return Err("가져온 대화의 작업 폴더가 이후 변경됐습니다.".into());
         }
         if crate::workflow::messages_digest(&path, job)?
-            != crate::workflow::messages_digest(request.source, job)?
+            != crate::workflow::messages_digest(&crate::resolve_rollout_path(request.source)?, job)?
         {
             return Err("중단 후 대화 내용이 변경됐습니다.".into());
         }
@@ -358,9 +367,12 @@ impl Adapter {
         if !valid_bundle_path(operation) || operation.contains('/') {
             return Err("가져오기 작업 ID 오류".into());
         }
-        let source_lock = read_locked(request.source)?;
+        let resolved_source = crate::resolve_rollout_path(request.source)?;
+        let source_lock = read_locked(&resolved_source)?;
         if let Some(expected) = request.expected_sha256 {
-            if !digest(request.source, job)?.eq_ignore_ascii_case(expected) {
+            if !digest(&crate::resolve_rollout_path(request.source)?, job)?
+                .eq_ignore_ascii_case(expected)
+            {
                 return Err("검증 이후 백업 대화가 변경됐습니다.".into());
             }
         }
@@ -371,7 +383,12 @@ impl Adapter {
         let target = if let Some(thread) = &existing {
             self.validate_owned_import(request, operation, thread, job)?
         } else if let Some(owner) = owner {
-            let target = PathBuf::from(owner["path"].as_str().ok_or("가져오기 파일 계획 누락")?);
+            let planned = PathBuf::from(owner["path"].as_str().ok_or("가져오기 파일 계획 누락")?);
+            let target = if planned.exists() || planned.with_extension("jsonl.zst").exists() {
+                crate::resolve_rollout_path(&planned)?
+            } else {
+                planned
+            };
             self.checked_rollout_path(&target)?;
             if target.exists() {
                 let fake = json!({"id":request.id,"path":target});
@@ -419,13 +436,13 @@ impl Adapter {
                 job,
             )?;
             let target = rollout_target(&self.store.home, request.id)?;
-            self.journal.record(operation,"rollout-publish-intent",json!({"threadId":request.id,"projectId":request.project,"stage":stage,"path":target,"identity":identity(&stage)?,"derivedSha256":digest(&stage,job)?}))?;
+            self.journal.record(operation,"rollout-publish-intent",json!({"threadId":request.id,"projectId":request.project,"stage":stage,"path":target,"identity":identity(&stage)?,"derivedSha256":digest(&stage,job)?,"decodedSha256":crate::decoded_rollout_digest(&stage,job)?}))?;
             job.check()?;
             self.require_closed()?;
             rename_new(&stage, &target)?;
             target
         };
-        self.journal.record(operation,"rollout-published",json!({"threadId":request.id,"projectId":request.project,"path":target,"identity":identity(&target)?,"derivedSha256":digest(&target,job)?}))?;
+        self.journal.record(operation,"rollout-published",json!({"threadId":request.id,"projectId":request.project,"path":target,"identity":identity(&target)?,"derivedSha256":digest(&target,job)?,"decodedSha256":crate::decoded_rollout_digest(&target,job)?}))?;
         if existing.is_none() {
             self.journal.record(
                 operation,
@@ -475,7 +492,8 @@ impl Adapter {
             .ok_or("가져온 대화가 목록에 없습니다.")?;
         let location = Path::new(current["path"].as_str().ok_or("가져온 대화 경로 누락")?);
         self.checked_rollout_path(location)?;
-        self.journal.record(operation,"rollout-location",json!({"threadId":request.id,"projectId":request.project,"path":location,"identity":identity(location)?}))?;
+        self.release_server();
+        self.journal.record(operation,"rollout-location",json!({"threadId":request.id,"projectId":request.project,"path":location,"identity":identity(location)?,"derivedSha256":digest(location,job)?,"decodedSha256":crate::decoded_rollout_digest(location,job)?}))?;
         drop(source_lock);
         Ok(location.to_owned())
     }
@@ -528,6 +546,45 @@ mod tests {
         )
         .is_err());
         assert!(!root.join("home/sessions").exists());
+    }
+
+    #[test]
+    fn compressed_owned_rollout_requires_full_decoded_receipt() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test-artifacts")
+            .join(uuid::Uuid::new_v4().to_string());
+        let home = root.join("home");
+        fs::create_dir_all(home.join("sessions")).unwrap();
+        let adapter = Adapter::isolated(
+            crate::resolve_store(&home).unwrap(),
+            root.join("missing.exe"),
+            crate::Journal::open(&root.join("journal.sqlite")).unwrap(),
+        )
+        .unwrap();
+        let id = "00000000-0000-4000-8000-000000000077";
+        let planned = home.join("sessions/rollout.jsonl");
+        let text = format!(
+            "{}\n",
+            json!({"type":"session_meta","payload":{"id":id,"cwd":root}})
+        );
+        fs::write(&planned, &text).unwrap();
+        let op = adapter.journal.begin(&json!({"kind":"test"})).unwrap();
+        let raw = digest(&planned, &Job::new()).unwrap();
+        adapter.journal.record(&op,"rollout-location",json!({"threadId":id,"path":planned,"identity":identity(&planned).unwrap(),"decodedSha256":raw})).unwrap();
+        let zst = planned.with_extension("jsonl.zst");
+        fs::write(&zst, zstd::stream::encode_all(text.as_bytes(), 1).unwrap()).unwrap();
+        fs::remove_file(&planned).unwrap();
+        let thread = json!({"id":id,"path":planned});
+        assert!(adapter.owns_rollout(&op, &thread, &Job::new()).unwrap());
+        let changed = text.replace("session_meta", "turn_context");
+        fs::write(
+            &zst,
+            zstd::stream::encode_all(changed.as_bytes(), 1).unwrap(),
+        )
+        .unwrap();
+        assert!(!adapter
+            .owns_rollout(&op, &thread, &Job::new())
+            .unwrap_or(false));
     }
     #[test]
     #[ignore = "requires current installed Codex and a fresh isolated home"]

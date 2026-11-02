@@ -1130,3 +1130,98 @@ fn explicitly_selected_projectless_thread_keeps_equivalent_windows_runtime_root(
     assert_eq!(plan["roots"].as_array().unwrap().len(), 1);
     assert_eq!(plan["roots"][0]["source"], json!(clean_path(&workspace)));
 }
+
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_compressed_backup_import_and_recovery_preserve_proofs() {
+    let (root, mut source, mut target, project, first, second) = native_pair("compressed-native");
+    source
+        .call("thread/archive", json!({"threadId":first}))
+        .unwrap();
+    source.release_server();
+    let original = all_threads(&source.snapshot().unwrap())
+        .into_iter()
+        .find(|t| t["id"] == first)
+        .unwrap();
+    let path = PathBuf::from(original["path"].as_str().unwrap());
+    let bytes = fs::read(&path).unwrap();
+    let proof = messages_digest(&path, &Job::new()).unwrap();
+    let zst = path.with_extension("jsonl.zst");
+    fs::write(&zst, zstd::stream::encode_all(bytes.as_slice(), 1).unwrap()).unwrap();
+    fs::remove_file(&path).unwrap(); // isolated fixture models Codex compression; DB remains .jsonl
+    assert_eq!(messages_digest(&path, &Job::new()).unwrap(), proof);
+    assert_ne!(digest(&zst, &Job::new()).unwrap(), proof);
+    let backup = root.join("backup");
+    source
+        .export_backup(project["id"].as_str().unwrap(), &backup, &Job::new())
+        .unwrap();
+    let manifest = load_verified_bundle(&backup, &Job::new()).unwrap();
+    let saved = manifest["conversations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == first)
+        .unwrap();
+    assert_eq!(
+        fs::read(backup.join(saved["rollout"].as_str().unwrap())).unwrap(),
+        fs::read(&zst).unwrap()
+    );
+    let destination = root.join("relocated-한글");
+    target
+        .import_backup(
+            &backup,
+            std::slice::from_ref(&destination),
+            None,
+            false,
+            None,
+            &Job::new(),
+        )
+        .unwrap();
+    target.release_server();
+    let restored = all_threads(&target.snapshot().unwrap());
+    assert_eq!(restored.len(), 2);
+    for (id, name, archived) in [(&first, "첫 대화", true), (&second, "남은 대화", false)] {
+        let t = restored.iter().find(|t| t["id"] == *id).unwrap();
+        assert_eq!(t["name"], name);
+        assert_eq!(t["archived"], archived);
+        assert_eq!(
+            clean_path(std::path::Path::new(t["cwd"].as_str().unwrap())),
+            destination
+        );
+        let file = PathBuf::from(t["path"].as_str().unwrap());
+        assert_eq!(runtime_roots(&file).unwrap(), vec![destination.clone()]);
+        if id == &first {
+            assert_eq!(messages_digest(&file, &Job::new()).unwrap(), proof);
+        }
+    }
+    assert_eq!(
+        fs::read(destination.join("bytes.txt")).unwrap(),
+        b"verified workspace bytes"
+    );
+    assert!(zst.exists());
+    let deletion = source
+        .delete(&[], std::slice::from_ref(&first), false, &Job::new())
+        .unwrap();
+    let event = source.journal.operation(&deletion).unwrap().unwrap();
+    let recovery = PathBuf::from(event["payload"]["saved"][0]["path"].as_str().unwrap());
+    assert_eq!(
+        fs::read(&recovery).unwrap(),
+        zstd::stream::encode_all(bytes.as_slice(), 1).unwrap()
+    );
+    source.undo(&deletion).unwrap();
+    source.release_server();
+    let recovered = all_threads(&source.snapshot().unwrap())
+        .into_iter()
+        .find(|t| t["id"] == first)
+        .unwrap();
+    assert_eq!(recovered["name"], "첫 대화");
+    assert_eq!(recovered["archived"], true);
+    assert_eq!(
+        messages_digest(
+            std::path::Path::new(recovered["path"].as_str().unwrap()),
+            &Job::new()
+        )
+        .unwrap(),
+        proof
+    );
+}

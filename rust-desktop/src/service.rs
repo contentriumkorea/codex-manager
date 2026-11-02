@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -309,9 +308,9 @@ impl Service {
         ensure_plain(path)?;
         let mut messages = VecDeque::new();
         let mut total = 0;
-        for line in BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?).lines() {
-            let item: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+        let mut reader = RolloutReader::open_live(path, Some(thread_id), &Job::new())?;
+        while let Some(record) = reader.next_record()? {
+            let item = record.value;
             let p = &item["payload"];
             if item["type"] != "response_item"
                 || p["type"] != "message"

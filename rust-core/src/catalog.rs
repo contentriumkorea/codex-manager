@@ -192,6 +192,15 @@ pub fn merge_legacy_assignments(
 }
 
 pub fn organize_catalog(projects: Vec<Value>, mut threads: Vec<Value>) -> Result<Catalog, String> {
+    for thread in &mut threads {
+        if let Some(path) = thread["path"].as_str() {
+            let path = std::path::Path::new(path);
+            // Keep missing histories visible; readers report the error when selected.
+            if path.exists() || path.with_extension("jsonl.zst").exists() {
+                thread["path"] = serde_json::json!(crate::resolve_rollout_path(path)?);
+            }
+        }
+    }
     crate::membership::annotate(&projects, &mut threads)?;
     let mut locations = HashMap::new();
     let mut grouped = Vec::new();

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -139,9 +139,17 @@ pub(crate) fn backup_project_observed(
     let mut dependencies = Vec::new();
     for t in &selected {
         job.check()?;
+        let resolved = crate::resolve_rollout_path(Path::new(
+            t["path"].as_str().ok_or("Missing rollout path")?,
+        ))?;
+        let suffix = if resolved.extension().is_some_and(|e| e == "zst") {
+            "jsonl.zst"
+        } else {
+            "jsonl"
+        };
         let relative = format!(
-            "conversations/{}.jsonl",
-            t["id"].as_str().ok_or("대화 ID 오류")?
+            "conversations/{}.{suffix}",
+            t["id"].as_str().ok_or("Invalid thread ID")?
         );
         let record = conversation(t, relative)?;
         let map = paths
@@ -170,9 +178,9 @@ pub(crate) fn backup_project_observed(
             dependencies.push(json!({"kind":"cross_project_child","thread_id":t["id"]}));
         }
         let source = Path::new(t["path"].as_str().ok_or("대화 기록 경로 누락")?);
-        for line in BufReader::new(fs::File::open(source).map_err(|e| e.to_string())?).lines() {
-            job.check()?;
-            let line = line.map_err(|e| e.to_string())?;
+        let mut reader = crate::RolloutReader::open(source, t["id"].as_str(), job)?;
+        while let Some(decoded) = reader.next_record()? {
+            let line = decoded.line;
             if !line.contains("image_path") && !line.contains("\"path\"") {
                 continue;
             }
@@ -238,16 +246,20 @@ pub(crate) fn backup_project_observed(
         }
     }
     let total = selected.iter().try_fold(0u64, |sum, t| {
-        let size = fs::metadata(Path::new(t["path"].as_str().ok_or("대화 기록 경로 누락")?))
-            .map_err(|e| e.to_string())?
-            .len();
+        let size = fs::metadata(crate::resolve_rollout_path(Path::new(
+            t["path"].as_str().ok_or("대화 기록 경로 누락")?,
+        ))?)
+        .map_err(|e| e.to_string())?
+        .len();
         sum.checked_add(size)
             .ok_or_else(|| "대화 크기 초과".to_owned())
     })?;
     job.phase("대화 기록 복사·검증", total);
     let mut done = 0;
     for (t, record) in selected.iter().zip(&records) {
-        let source = Path::new(t["path"].as_str().ok_or("대화 경로 누락")?);
+        let resolved =
+            crate::resolve_rollout_path(Path::new(t["path"].as_str().ok_or("대화 경로 누락")?))?;
+        let source = resolved.as_path();
         let entry = Entry {
             identity: Some(crate::identity(source)?),
             path: record["rollout"].as_str().unwrap().into(),

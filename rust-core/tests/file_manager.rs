@@ -113,7 +113,7 @@ fn secondary_runtime_workspace_blocks_directory_changes() {
     let outside = root.parent().unwrap().join("other-workspace");
     fs::create_dir(&outside).unwrap();
     let rollout = root.parent().unwrap().join("thread.jsonl");
-    fs::write(&rollout,format!("{}\n",serde_json::json!({"type":"session_meta","payload":{"runtime_workspace_roots":[secondary]}}))).unwrap();
+    fs::write(&rollout,format!("{}\n",serde_json::json!({"type":"session_meta","payload":{"id":"00000000-0000-4000-8000-000000000099","runtime_workspace_roots":[secondary]}}))).unwrap();
     let db = rusqlite::Connection::open(adapter.store.database.as_ref().unwrap()).unwrap();
     db.execute_batch("ALTER TABLE threads ADD COLUMN rollout_path TEXT;")
         .unwrap();

@@ -14,10 +14,12 @@ mod storage;
 mod transfer;
 pub use adapter::{all_threads, catalog_json, roots, valid_name, Adapter};
 mod rollout;
+mod rollout_io;
 pub use job::Job;
 pub use journal::Journal;
 pub use platform::{check_version, command_output, desktop_closed, find_codex};
 pub use rollout::{prepare_rollout, prepare_rollout_with_job, rollout_target, ThreadImport};
+pub use rollout_io::{decoded_rollout_digest, resolve_rollout_path, RolloutReader, RolloutRecord};
 pub use storage::{
     absolute, discover_stores, discover_stores_with_job, ensure_plain, read_store, resolve_store,
     Store,
@@ -27,6 +29,7 @@ pub use transfer::{
     Tree,
 };
 pub use transfer::{rename_new, resume_copy_tree};
+pub use workflow::messages_digest;
 
 pub use bundle_fs::{load_verified_bundle, verified_bundle, verify_bundle, VerifiedBundle};
 mod backup;

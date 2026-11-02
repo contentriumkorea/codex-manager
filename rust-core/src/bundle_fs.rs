@@ -166,6 +166,23 @@ pub fn verified_bundle(root: &Path, job: &Job) -> Result<VerifiedBundle, String>
     if collect_files(root)? != expected {
         return Err("bundle file list differs".into());
     }
+    for thread in manifest["conversations"]
+        .as_array()
+        .ok_or("missing conversations")?
+    {
+        let relative = thread["rollout"].as_str().ok_or("missing rollout path")?;
+        let path = checked_path(root, relative)?;
+        let expected = checksums
+            .iter()
+            .find(|e| e["path"] == relative)
+            .and_then(|e| e["sha256"].as_str())
+            .ok_or("missing rollout checksum")?;
+        let mut reader = crate::RolloutReader::open(&path, thread["id"].as_str(), job)?;
+        if !reader.raw_sha256().eq_ignore_ascii_case(expected) {
+            return Err("rollout changed after checksum verification".into());
+        }
+        while reader.next_record()?.is_some() {}
+    }
     job.check()?;
     Ok(VerifiedBundle {
         manifest,

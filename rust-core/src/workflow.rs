@@ -8,16 +8,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 
-pub(crate) fn messages_digest(path: &Path, job: &Job) -> Result<String, String> {
+pub fn messages_digest(path: &Path, job: &Job) -> Result<String, String> {
     let mut hash = Sha256::new();
-    for line in BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?).lines() {
-        job.check()?;
-        let line = line.map_err(|e| e.to_string())?;
-        let value: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+    let mut reader = crate::RolloutReader::open_live(path, None, job)?;
+    while let Some(record) = reader.next_record()? {
+        let value = record.value;
         if value["type"] == "response_item" && value["payload"]["type"] == "message" {
             hash.update(serde_json::to_vec(&value["payload"]).map_err(|e| e.to_string())?);
             hash.update(b"\n");

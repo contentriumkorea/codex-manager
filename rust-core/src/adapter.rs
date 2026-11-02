@@ -716,7 +716,10 @@ impl Adapter {
                 job.check()?;
                 let id = t["id"].as_str().ok_or("대화 ID 오류")?;
                 uuid::Uuid::parse_str(id).map_err(|_| "대화 ID 형식 오류")?;
-                let source = Path::new(t["path"].as_str().ok_or("대화 원본이 없습니다.")?);
+                let resolved = crate::resolve_rollout_path(Path::new(
+                    t["path"].as_str().ok_or("대화 원본이 없습니다.")?,
+                ))?;
+                let source = resolved.as_path();
                 let sha = digest(source, job)?;
                 let path = recovery.join(format!("{id}.jsonl"));
                 let entry = crate::Entry {

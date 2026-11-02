@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 fn s<'a>(v: &'a Value, k: &str) -> Result<&'a str, String> {
@@ -127,10 +126,9 @@ fn dependencies(t: &Value, paths: &[PathBuf], job: &Job) -> Result<(), String> {
     if t["attachmentCount"].as_u64().unwrap_or(0) > 0 || !t["attachedThreadParentId"].is_null() {
         return Err("외부 첨부 의존성이 있는 대화입니다. 백업에서 의존성을 확인하세요.".into());
     }
-    for line in BufReader::new(fs::File::open(path).map_err(|e| e.to_string())?).lines() {
-        job.check()?;
-        let v: Value =
-            serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut reader = RolloutReader::open(path, t["id"].as_str(), job)?;
+    while let Some(record) = reader.next_record()? {
+        let v = record.value;
         if v["type"] == "response_item" {
             for part in v["payload"]["content"].as_array().into_iter().flatten() {
                 if let Some(p) = part["path"].as_str().or(part["image_path"].as_str()) {
@@ -1504,9 +1502,10 @@ fn cleanup_bundles(
         for stamp in arr(plan, "threadStamps")? {
             let tid = s(&stamp["thread"], "id")?;
             let path = bundle.join("conversations").join(format!("{tid}.jsonl"));
-            if !path.exists() {
+            if !path.exists() && !path.with_extension("jsonl.zst").exists() {
                 continue;
             }
+            let path = resolve_rollout_path(&path)?;
             let original = PathBuf::from(s(&stamp["thread"], "path")?);
             let reference = if original.exists() {
                 original

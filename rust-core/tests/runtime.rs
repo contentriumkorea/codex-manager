@@ -8,7 +8,7 @@ fn reverse_scan_crosses_large_lines_and_explicit_empty_roots_win() {
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&root).unwrap();
     let path = root.join("rollout.jsonl");
-    let first = json!({"type":"session_meta","payload":{"runtime_workspace_roots":[root]}});
+    let first = json!({"type":"session_meta","payload":{"id":"00000000-0000-4000-8000-000000000099","runtime_workspace_roots":[root]}});
     let large = json!({"type":"response_item","payload":{"content":"x".repeat(300_000)}});
     fs::write(&path, format!("{first}\n{large}\n")).unwrap();
     assert_eq!(runtime_roots(&path).unwrap(), vec![root]);
