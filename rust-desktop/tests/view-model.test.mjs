@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { visibleProjects } from "../ui/view-model.mjs";
+import { visibleProjects, visibleThreads, membershipLabel } from "../ui/view-model.mjs";
 
 const catalog = {
   projects: [
@@ -39,4 +39,24 @@ test("search matches project name, multiple folder paths and conversation titles
     ["b"],
   );
   assert.deepEqual(visibleProjects(catalog, "없는 이름", "asc"), []);
+});
+
+
+test("normal counts include archived and no-user-event records; internal toggle preserves catalog", () => {
+  const records = [
+    {id:"normal",hasUserEvent:false,membershipReason:"folder"},
+    {id:"archived",archived:true,hasUserEvent:false,membershipReason:"projectless"},
+    {id:"internal",internal:true,membershipReason:"parent",name:"hidden needle"},
+  ];
+  const catalog = {projects:[{project:{id:"p",name:"Project",roots:[]},threads:records}]};
+  assert.deepEqual(visibleThreads(records).map(t=>t.id),["normal","archived"]);
+  assert.equal(visibleThreads(records,"normal-active").length,1);
+  assert.equal(visibleThreads(records,"all").length,3);
+  assert.equal(visibleThreads(records,"all-active").length,2);
+  assert.equal(visibleProjects(catalog,"needle","asc").length,0);
+  assert.equal(visibleProjects(catalog,"needle","asc","all").length,1);
+  assert.equal(catalog.projects[0].threads.length,3,"backup/dependency selection retains internal data");
+  assert.match(membershipLabel(records[0]),/표시만/);
+  assert.match(membershipLabel(records[1]),/없음으로 설정/);
+  assert.match(membershipLabel({membershipReason:"ambiguous"}),/확인 필요/);
 });

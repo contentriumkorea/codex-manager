@@ -216,3 +216,5 @@ header {
   align-items: center;
   min-width: 0;
 }
+
+#record-filter { max-width: 175px; min-width: 0; font-size: 12px; }

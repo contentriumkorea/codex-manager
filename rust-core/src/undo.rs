@@ -133,7 +133,7 @@ impl Adapter {
             }
             "rust-thread-names" | "rename-thread" | "rename-threads" => self.undo_names(&p),
             "rust-project-edit" => self.undo_project(&p),
-            "rust-assign" => self.undo_assign(&p),
+            "rust-assign" => self.undo_assign(id, &p),
             "rust-merge" | "rust-delete" => self.undo_removed(id, &p, job),
             "rust-transfer" => self.undo_transfer(&p, job),
             "connections" => self.undo_legacy_connections(&p),
@@ -199,11 +199,55 @@ impl Adapter {
         self.update_project(before)?;
         self.sync(std::slice::from_ref(before), &HashMap::new(), &[], &[])
     }
-    fn undo_assign(&mut self, p: &Value) -> Result<(), String> {
+    fn undo_assign(&mut self, operation: &str, p: &Value) -> Result<(), String> {
         let threads = array(p, "threads")?;
         for t in threads {
             let current = self.read_thread(field(t, "id")?)?;
-            if current["projectId"] != p["target"] && current["projectId"] != t["projectId"] {
+            let mut expected = p["target"].clone();
+            if p["displayConfirmation"] == true {
+                // A completed merge/delete undo may recreate the source project.
+                // Accept only the exact restored ID recorded for this conversation,
+                // after requiring all later operations on it to be undone first.
+                let history = self.journal.history()?;
+                let own = history
+                    .iter()
+                    .position(|r| r["id"] == operation)
+                    .ok_or("연결 확인 뒤의 복구 이력을 확인할 수 없습니다.")?;
+                for later in history[..own].iter().rev() {
+                    if later["payload"]["home"] != p["home"] {
+                        continue;
+                    }
+                    let before = later["payload"]["threads"]
+                        .as_array()
+                        .and_then(|ts| ts.iter().find(|x| x["id"] == t["id"]));
+                    let Some(before) = before else {
+                        continue;
+                    };
+                    let events = self.journal.events(field(later, "id")?)?;
+                    if !events.iter().any(|e| e["payload"]["recovered"] == true) {
+                        return Err(
+                            "이 대화의 이후 작업을 먼저 복구한 뒤 연결 확인을 복구하세요.".into(),
+                        );
+                    }
+                    if matches!(
+                        later["payload"]["kind"].as_str(),
+                        Some("rust-merge" | "rust-delete")
+                    ) && before["projectId"] == expected
+                    {
+                        expected = events
+                            .iter()
+                            .rev()
+                            .find(|e| {
+                                e["phase"] == "restoring-thread"
+                                    && e["payload"]["threadId"] == t["id"]
+                            })
+                            .and_then(|e| e["payload"]["projectId"].as_str())
+                            .map(|id| json!(id))
+                            .ok_or("완료된 프로젝트 복구 연결 증거가 없습니다.")?;
+                    }
+                }
+            }
+            if current["projectId"] != expected && current["projectId"] != t["projectId"] {
                 return Err("대화 소속이 이후 변경됐습니다.".into());
             }
         }
@@ -372,7 +416,7 @@ impl Adapter {
             let old = Path::new(field(thread, "cwd")?);
             let new = map_workspace(old, &mapping)?;
             let cwd = clean_path(Path::new(field(&read, "cwd")?));
-            if read["projectId"] != before["id"] || (cwd != clean_path(old) && cwd != new) {
+            if read["projectId"] != thread["projectId"] || (cwd != clean_path(old) && cwd != new) {
                 return Err("대화 소속이나 작업 경로가 이후 변경됐습니다.".into());
             }
             let record = array(&manifest, "conversations")?

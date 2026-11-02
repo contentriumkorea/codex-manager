@@ -414,6 +414,7 @@ impl Service {
     pub fn start(self: &Arc<Self>, action: String, args: Value) -> Result<String, String> {
         let id = uuid::Uuid::new_v4().to_string();
         let readonly = [
+            "connection_plan",
             "scan",
             "sizes",
             "cross_store_conclude_plan",
@@ -668,6 +669,12 @@ impl Service {
                     "목록이 다른 곳에서 변경됐습니다. 새로 고침한 뒤 다시 선택하세요.".into(),
                 );
             }
+        }
+        if action == "connection_plan" {
+            return adapter.connection_plan(&strings(args, "projects")?);
+        }
+        if action == "confirm_connections" {
+            return adapter.confirm_connections(&args["plan"], job);
         }
         let mut mapped_args = args.clone();
         if [

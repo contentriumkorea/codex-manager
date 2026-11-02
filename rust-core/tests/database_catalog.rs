@@ -39,7 +39,8 @@ fn reads_empty_and_assigned_threads_without_folder_guessing() {
     );
     assert_eq!(catalog.projects[0].threads[0]["id"], "empty");
     assert_eq!(catalog.projects[1].threads[0]["id"], "assigned");
-    assert_eq!(catalog.unassigned[0]["id"], "loose");
+    assert!(catalog.unassigned.is_empty());
+    assert_eq!(catalog.unresolved[1]["id"], "loose");
     assert_eq!(catalog.unresolved[0]["id"], "unknown");
     let c = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     assert_eq!(

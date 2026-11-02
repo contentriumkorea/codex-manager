@@ -151,6 +151,7 @@ fn read_raw(path: &Path) -> Result<(Vec<Value>, Vec<Value>), String> {
         "attached_thread_parent_id",
         "updated_at",
         "source",
+        "thread_source",
     ];
     let expression = fields
         .iter()
@@ -176,13 +177,26 @@ fn read_raw(path: &Path) -> Result<(Vec<Value>, Vec<Value>), String> {
                 r.get::<_, Option<String>>(8)?,
                 r.get::<_, Option<i64>>(9)?,
                 r.get::<_, Option<String>>(10)?,
+                r.get::<_, Option<String>>(11)?,
             ))
         })
         .map_err(|e| e.to_string())?;
     let mut threads = Vec::<Value>::new();
     for row in rows {
-        let (id, project, cwd, name, title, path, archived, has_event, attached, updated, source) =
-            row.map_err(|e| e.to_string())?;
+        let (
+            id,
+            project,
+            cwd,
+            name,
+            title,
+            path,
+            archived,
+            has_event,
+            attached,
+            updated,
+            source,
+            thread_source,
+        ) = row.map_err(|e| e.to_string())?;
         let count = if attachment_cols.is_empty() {
             None
         } else {
@@ -196,7 +210,11 @@ fn read_raw(path: &Path) -> Result<(Vec<Value>, Vec<Value>), String> {
             .get(&id)
             .map(String::as_str)
             .or_else(|| source["subagent"]["thread_spawn"]["parent_thread_id"].as_str());
-        let internal = source["subagent"].is_object();
+        let internal = source["subagent"].is_object()
+            || matches!(
+                thread_source.as_deref(),
+                Some("subagent" | "guardian_review")
+            );
         threads.push(json!({"id":id,"projectId":project,"cwd":cwd,"name":name.filter(|x|!x.is_empty()).or(title),
             "path":path,"archived":archived.map(|n|n!=0),"hasUserEvent":has_event.map(|n|n!=0),
             "parentThreadId":parent,"attachedThreadParentId":attached,"attachmentCount":count,"updatedAt":updated,"internal":internal}));

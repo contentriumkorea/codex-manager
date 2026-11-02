@@ -390,6 +390,7 @@ impl Adapter {
         }
         validate_destinations(self, &paths, destinations)?;
         let snapshot = self.snapshot()?;
+        crate::connections::require_connections(&snapshot, &[id.to_owned()])?;
         for g in &snapshot.projects {
             if g.project["id"] == id {
                 continue;

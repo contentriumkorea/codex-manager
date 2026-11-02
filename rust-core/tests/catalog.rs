@@ -108,8 +108,10 @@ fn explicit_membership_not_folder_similarity_controls_project_grouping() {
         2
     );
     assert_eq!(catalog.projects[1].threads[0]["id"], "t1");
-    assert_eq!(catalog.unassigned[0]["id"], "t2");
-    assert_eq!(catalog.unresolved[0]["id"], "t3");
+    assert!(catalog.unassigned.is_empty());
+    assert_eq!(catalog.unresolved[0]["id"], "t2");
+    assert_eq!(catalog.unresolved[0]["membershipReason"], "ambiguous");
+    assert_eq!(catalog.unresolved[1]["id"], "t3");
 }
 
 #[test]

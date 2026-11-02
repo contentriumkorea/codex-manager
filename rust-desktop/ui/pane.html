@@ -24,7 +24,7 @@
         </button>
         <button id="nav-unassigned" class="nav">
           <span class="nav-icon" aria-hidden="true">▤</span
-          ><span class="nav-label">프로젝트 미지정</span
+          ><span class="nav-label">미지정·연결 확인</span
           ><span id="unassigned-count" class="badge"></span>
         </button>
         <button id="nav-history" class="nav">
@@ -85,6 +85,12 @@
           ><button id="update-now" class="primary">업데이트</button>
         </div>
         <div class="toolbar">
+          <select id="record-filter" aria-label="대화 표시 범위" title="보기만 변경합니다. 백업과 작업 의존성에는 내부 기록도 보존합니다.">
+            <option value="normal">일반 대화 · 보관 포함</option>
+            <option value="normal-active">일반 대화 · 보관 제외</option>
+            <option value="all">내부 포함 · 보관 포함</option>
+            <option value="all-active">내부 포함 · 보관 제외</option>
+          </select>
           <div id="tabs" class="segmented" hidden>
             <button id="tab-threads" class="active">대화</button
             ><button id="tab-files">파일</button>

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.12.1"></a>
+  <a href="https://github.com/contentriumkorea/codex-manager/releases/latest"><img src="docs/images/badge-release.svg" alt="Release 0.12.2"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-windows.svg" alt="Windows x64 지원"></a>
   <a href="#적용-범위와-제한"><img src="docs/images/badge-license.svg" alt="라이선스 미지정"></a>
 </p>
@@ -52,7 +52,7 @@
 
 **양쪽 탐색기에서 서로 다른 저장소를 열고 프로젝트·대화·파일을 함께 옮길 수 있습니다.**
 
-각 탐색기의 저장소·검색·정렬·선택은 독립적입니다. 여러 항목을 반대편으로 끌어 놓고 대상 폴더와 이동·복사를 확인하세요. [0.12.1 변경 사항 →](docs/release-0.12.1.md)
+각 탐색기의 저장소·검색·정렬·선택은 독립적입니다. 여러 항목을 반대편으로 끌어 놓고 대상 폴더와 이동·복사를 확인하세요. [0.12.2 변경 사항 →](docs/release-0.12.2.md)
 
 위 화면은 예시 프로젝트를 사용한 실제 앱 화면입니다. 화면의 버전 표시는 촬영 당시 기준이며, 최신 버전은 릴리스에서 확인할 수 있습니다.
 

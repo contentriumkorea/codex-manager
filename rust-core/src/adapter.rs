@@ -283,7 +283,12 @@ impl Adapter {
             }
             job.check()?;
             self.guard()?;
-            let mut threads = group.threads.clone();
+            let mut threads = group
+                .threads
+                .iter()
+                .filter(|t| t["projectId"] == group.project["id"])
+                .cloned()
+                .collect::<Vec<_>>();
             for thread in &mut threads {
                 thread["nativeBefore"] = self
                     .read_thread(thread["id"].as_str().ok_or("대화 ID 누락")?)?["projectId"]
@@ -569,6 +574,7 @@ impl Adapter {
         let mut selected = Vec::new();
         let mut paths = roots(&before_target)?;
         let catalog = self.snapshot()?;
+        crate::connections::require_connections(&catalog, sources)?;
         for id in sources {
             let p = self.project(id)?;
             for path in roots(&p)? {
@@ -642,6 +648,7 @@ impl Adapter {
         self.guard()?;
         let catalog = self.snapshot()?;
         let all = all_threads(&catalog);
+        crate::connections::require_connections(&catalog, project_ids)?;
         let mut projects = Vec::new();
         let mut selected: HashSet<_> = thread_ids.iter().cloned().collect();
         for id in project_ids {

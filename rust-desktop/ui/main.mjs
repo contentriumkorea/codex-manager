@@ -1,5 +1,5 @@
 import { sameHome } from "./pane-model.mjs";
-import { visibleProjects } from "./view-model.mjs";
+import { visibleProjects, visibleThreads, membershipLabel } from "./view-model.mjs";
 import {
   sortedRows,
   selectRange,
@@ -20,6 +20,7 @@ const state = {
   pendingRender: false,
   catalog: { projects: [], unassigned: [], unresolved: [] },
   mode: "projects",
+  recordFilter: "normal",
   project: null,
   selected: new Set(),
   anchor: null,
@@ -117,11 +118,11 @@ async function confirm(title, description, danger = false) {
   );
 }
 function projectRows() {
-  return visibleProjects(state.catalog, el("search").value, "asc").map((g) => ({
+  return visibleProjects(state.catalog, el("search").value, "asc", state.recordFilter).map((g) => ({
     id: g.project.id,
     name: g.project.name,
     path: g.project.roots.map((r) => r.path).join(" · "),
-    count: g.threads.length,
+    count: visibleThreads(g.threads, state.recordFilter).length,
     size: state.sizes[g.project.id]?.error
       ? undefined
       : state.sizes[g.project.id]?.bytes,
@@ -146,18 +147,12 @@ function rows() {
       state.mode === "unassigned"
         ? [...state.catalog.unassigned, ...state.catalog.unresolved]
         : (currentGroup()?.threads ?? []);
-    data = threads.map((t) => ({
+    data = visibleThreads(threads, state.recordFilter).map((t) => ({
       ...t,
       name: titleOf(t),
       updatedAt: t.updatedAt ?? 0,
       path: t.cwd,
-      status: t.archived
-        ? "보관됨"
-        : t.hasUserEvent === false
-          ? "빈 대화"
-          : t.internal
-            ? "내부 대화"
-            : "대화",
+      status: `${t.archived ? "보관됨 · " : ""}${t.internal ? "내부 · " : ""}${membershipLabel(t)}`,
     }));
   }
   const term = el("search").value.trim().toLocaleLowerCase("ko-KR");
@@ -173,6 +168,7 @@ function rows() {
 }
 function historyLabel(r) {
   const p = r.payload;
+  if (p.displayConfirmation) return "표시된 대화 연결 확인";
   const labels = {
     "rust-backup": "프로젝트 백업",
     "rust-legacy": "프로젝트 연결 정리",
@@ -421,10 +417,11 @@ function render() {
     state.mode === "projects"
       ? "모든 프로젝트"
       : state.mode === "unassigned"
-        ? "프로젝트 미지정"
+        ? "미지정·연결 확인"
         : state.mode === "history"
           ? "작업 내역·복구"
           : currentGroup()?.project.name || "프로젝트";
+  el("record-filter").hidden = ["files", "history"].includes(state.mode);
   el("tabs").hidden = !["threads", "files"].includes(state.mode);
   el("tab-threads").classList.toggle("active", state.mode === "threads");
   el("tab-files").classList.toggle("active", state.mode === "files");
@@ -452,7 +449,7 @@ function render() {
     state.mode === "history";
   el("project-count").textContent = state.catalog.projects.length;
   el("unassigned-count").textContent =
-    state.catalog.unassigned.length + state.catalog.unresolved.length;
+    visibleThreads([...state.catalog.unassigned, ...state.catalog.unresolved], state.recordFilter).length;
   el("nav-projects").classList.toggle("active", state.mode === "projects");
   el("nav-unassigned").classList.toggle("active", state.mode === "unassigned");
   el("nav-history").classList.toggle("active", state.mode === "history");
@@ -462,10 +459,10 @@ function render() {
       : state.mode === "history"
         ? "작업 결과를 확인하고 중단된 작업을 복구하세요."
         : state.mode === "unassigned"
-          ? "명시적인 소속이 없는 대화와 연결 확인이 필요한 대화입니다."
+          ? "프로젝트 없음 설정과 연결 확인이 필요한 대화를 구분해 표시합니다."
           : state.mode === "projects"
-            ? "프로젝트를 두 번 클릭해 대화와 파일을 열어보세요."
-            : `${currentGroup()?.threads.length ?? 0}개 대화 · ${currentGroup()?.project.roots.length ?? 0}개 폴더`;
+            ? "폴더·원래 대화 기준 표시는 저장소를 변경하지 않습니다. 백업에는 내부 기록도 포함됩니다."
+            : `${visibleThreads(currentGroup()?.threads, state.recordFilter).length}개 대화 · ${currentGroup()?.project.roots.length ?? 0}개 폴더 · ${state.recordFilter.endsWith("active") ? "보관 제외" : "보관 포함"}`;
   renderDetails();
   if (!(state.busy || state.externalBusy))
     setStatus(
@@ -533,7 +530,7 @@ function renderDetails() {
     dl.append(node("dt", label), node("dd", value));
   };
   if (state.mode === "projects") {
-    info("연결된 대화", selected.reduce((s, r) => s + r.count, 0) + "개");
+    info("표시된 대화", selected.reduce((s, r) => s + r.count, 0) + "개");
     for (const r of selected)
       info(
         r.name,
@@ -646,6 +643,7 @@ function renderDetails() {
     info("작업 폴더", first.cwd ?? "");
     info("대화 ID", first.id);
     info("상태", first.status);
+    info("저장된 프로젝트", first.projectId || "없음");
     body.append(button("대화 내용 보기", () => viewTranscript(first)));
   }
   body.append(dl);
@@ -864,6 +862,27 @@ async function pollJob(id, _show = false, onProgress) {
 async function runJob(action, args, onProgress) {
   if (state.busy || state.externalBusy || state.switching)
     throw new Error("진행 중인 작업이 있습니다.");
+  const projects = action === "merge" ? args.ids : action === "delete" ? args.projects : action === "transfer" ? [args.id] : [];
+  if (projects?.length) {
+    const home = state.home;
+    const revision = state.catalog.revision;
+    const planJob = await invoke("start_job", {action: "connection_plan", args: {home, projects, expectedRevision: revision}});
+    const plan = await pollJob(planJob);
+    if (state.home !== home || state.catalog.revision !== revision) throw new Error("저장소나 목록이 바뀌었습니다. 다시 선택하세요.");
+    if (plan.groups.length) {
+      const records = plan.groups.flatMap((g) => g.threads);
+      const internal = records.filter((t) => t.internal).length;
+      const yes = await dialog("표시된 대화 연결 확인", (body) => {
+        body.append(node("p", `폴더·원래 대화 기준의 일반 대화 ${records.length - internal}개와 내부 기록 ${internal}개를 실제 프로젝트에 연결한 뒤 요청한 작업을 진행합니다.`));
+        body.append(node("div", plan.groups.map((g) => `${g.project.name}\n${g.threads.map((t) => `${titleOf(t)} · ${t.id} · ${membershipLabel(t)}`).join("\n")}`).join("\n\n"), "summary-box"));
+        body.append(node("p", "연결 확인은 별도 작업 내역으로 남습니다. 중단 시 내역을 확인하세요. 되돌릴 때는 이후 이동·합치기·삭제를 먼저 복구하고 연결 확인을 복구하세요."));
+        return () => true;
+      }, "연결하고 진행");
+      if (!yes) return null;
+      if (state.home !== home || state.catalog.revision !== revision) throw new Error("저장소나 목록이 바뀌었습니다. 다시 선택하세요.");
+      await runJob("confirm_connections", {plan});
+    }
+  }
   state.busy = true;
   render();
   try {
@@ -1544,6 +1563,12 @@ async function settingsDialog() {
 }
 el("refresh").addEventListener("click", () => refresh().catch(showError));
 el("search").addEventListener("input", render);
+el("record-filter").addEventListener("change", () => {
+  state.recordFilter = el("record-filter").value;
+  state.selected.clear();
+  renderNav();
+  render();
+});
 el("new-project").addEventListener("click", () =>
   newProject().catch(showError),
 );

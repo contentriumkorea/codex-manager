@@ -139,18 +139,25 @@ pub fn merge_legacy_assignments(
         return Err("invalid desktop project mappings".into());
     }
     let mut updated = threads.to_vec();
+    let projectless = state["projectless-thread-ids"].as_array();
+    let hosts = &state["thread-project-membership-host-ids"];
     for thread in &mut updated {
         let id = thread
             .get("id")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or("invalid thread id")?;
+        let id = id.to_owned();
+        thread["nativeProjectId"] = thread["projectId"].clone();
+        thread["explicitProjectless"] =
+            Value::Bool(projectless.is_some_and(|ids| ids.iter().any(|v| v == &id)));
+        thread["otherHost"] = Value::Bool(hosts[&id].as_str().is_some_and(|host| host != "local"));
         match thread.get("projectId") {
             Some(Value::String(pid)) if !pid.is_empty() => continue,
             Some(Value::Null) => {}
             _ => return Err("unknown project membership".into()),
         }
-        let Some(assignment) = assignments.and_then(|a| a.get(id)) else {
+        let Some(assignment) = assignments.and_then(|a| a.get(&id)) else {
             continue;
         };
         if assignment.is_null() {
@@ -184,7 +191,8 @@ pub fn merge_legacy_assignments(
     Ok(())
 }
 
-pub fn organize_catalog(projects: Vec<Value>, threads: Vec<Value>) -> Result<Catalog, String> {
+pub fn organize_catalog(projects: Vec<Value>, mut threads: Vec<Value>) -> Result<Catalog, String> {
+    crate::membership::annotate(&projects, &mut threads)?;
     let mut locations = HashMap::new();
     let mut grouped = Vec::new();
     for project in projects {
@@ -222,8 +230,17 @@ pub fn organize_catalog(projects: Vec<Value>, threads: Vec<Value>) -> Result<Cat
             unresolved.push(thread);
             continue;
         }
-        match thread.get("projectId") {
-            Some(Value::Null) => unassigned.push(thread),
+        match thread.get("displayProjectId") {
+            Some(Value::Null) => {
+                if matches!(
+                    thread["membershipReason"].as_str(),
+                    Some("projectless" | "outside")
+                ) {
+                    unassigned.push(thread);
+                } else {
+                    unresolved.push(thread);
+                }
+            }
             Some(Value::String(id)) if !id.is_empty() => {
                 if let Some(index) = locations.get(id) {
                     grouped[*index].threads.push(thread);
