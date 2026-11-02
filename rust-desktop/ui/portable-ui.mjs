@@ -1,5 +1,6 @@
 export function portableUI({ dialog, job, run, invoke, node, snapshot, error, element }) {
   const time = (value) => value ? (typeof value === "number" ? new Date(value * 1000).toLocaleString() : String(value)) : "아직 없음";
+  const statusFailure = (status) => status.statusError ? "현재 보관 상태 확인 실패: " + status.statusError : "";
   async function controls(project) {
     const source = snapshot();
     const roots = project.roots ?? [];
@@ -17,7 +18,7 @@ export function portableUI({ dialog, job, run, invoke, node, snapshot, error, el
       const enabled = node("input"); enabled.type = "checkbox"; enabled.checked = status.registration?.enabled === true;
       const label = node("label"); label.append(enabled, node("span", " 이 프로젝트의 대화 자동 보관"));
       const details = node("div", "", "summary-box"); details.setAttribute("aria-live", "polite");
-      const render = () => { details.textContent = `마지막 성공: ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}\n${status.snapshot?.complete ? "마지막 정상 보관본 있음" : "정상 보관본 없음"}\n${status.registration?.error || status.snapshot?.lastAttempt?.error || ""}\n${status.registration?.retentionWarning || status.snapshot?.lastAttempt?.retentionWarning || ""}`; };
+      const render = () => { details.textContent = `마지막 성공: ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}\n${statusFailure(status) || (status.snapshot?.complete ? "마지막 정상 보관본 있음" : "정상 보관본 없음")}\n${status.registration?.error || status.snapshot?.lastAttempt?.error || ""}\n${status.registration?.retentionWarning || status.snapshot?.lastAttempt?.retentionWarning || ""}`; };
       const reload = async () => { status = await job("portable_status", { home: source.home, project: project.id, anchor }); render(); };
       picker.addEventListener("change", () => { anchor = picker.value; reload().catch(error); });
       const save = node("button", "지금 보관"); save.type = "button";
@@ -74,7 +75,7 @@ export function portableUI({ dialog, job, run, invoke, node, snapshot, error, el
     if (!root) return "대화 보관: 연결 폴더 없음";
     const status = await job("portable_status", { home: snapshot().home, project: project.id, anchor: root });
     const failure = status.registration?.error || status.snapshot?.lastAttempt?.error;
-    return `자동 보관 ${status.registration?.enabled ? "켜짐" : "꺼짐"} · 마지막 성공 ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}${failure ? "\n보관 실패: " + failure : ""}`;
+    return `자동 보관 ${status.registration?.enabled ? "켜짐" : "꺼짐"} · 마지막 성공 ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}${status.statusError ? "\n" + statusFailure(status) : ""}${failure ? "\n보관 실패: " + failure : ""}`;
   }
   return { controls, openFolder, summary };
 }

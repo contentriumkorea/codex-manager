@@ -10,7 +10,7 @@ class Element {
   addEventListener(event, handler) { this.events[event] = handler; }
   fire(event) { return this.events[event]?.({ target: this }); }
 }
-function harness({ changed = false, corrupt = false } = {}) {
+function harness({ changed = false, corrupt = false, status = null } = {}) {
   const calls = [], elements = new Map(), errors = [];
   let collect, resolveDialog, body, planCount = 0;
   const element = (id) => { if (!elements.has(id)) elements.set(id, new Element(id)); return elements.get(id); };
@@ -21,7 +21,7 @@ function harness({ changed = false, corrupt = false } = {}) {
     if (action === "portable_inspect") { if (corrupt) throw new Error("corrupt snapshot"); return { project: { name: "Saved" } }; }
     if (action === "portable_plan") { planCount++; return { ...plan, snapshotId: changed && planCount > 1 ? "two" : "one" }; }
     if (action === "portable_restore") return { projectId: "restored" };
-    if (action === "portable_status") return { registration: { enabled: true, error: "last attempt failed" }, snapshot: { complete: true, lastSuccessfulSave: "2026-11-01" } };
+    if (action === "portable_status") return status ?? { registration: { enabled: true, error: "last attempt failed" }, snapshot: { complete: true, lastSuccessfulSave: "2026-11-01" } };
     return {};
   };
   const ui = portableUI({
@@ -69,4 +69,27 @@ test("automatic controls show a later failure even while the last good snapshot 
   assert.match(text, /2026-11-01/); assert.match(text, /last attempt failed/);
   h.confirm(); await pending;
   assert.equal(h.calls.at(-1).action, "portable_configure"); assert.equal(h.calls.at(-1).args.enabled, true);
+});
+const unreadableStatus = {
+  registration: { enabled: true, lastSuccessfulSave: "2026-11-01T00:00:00Z", error: null },
+  snapshot: null,
+  statusError: "Snapshot manifest hash mismatch",
+};
+test("summary exposes current native status error while preserving historical success and enabled state", async () => {
+  const h = harness({ status: unreadableStatus });
+  const text = await h.ui.summary({ id: "p", roots: [{ path: "E:/folder" }] });
+  assert.match(text, /현재 보관 상태 확인 실패: Snapshot manifest hash mismatch/);
+  assert.match(text, /2026-11-01T00:00:00Z/);
+  assert.match(text, /자동 보관 켜짐/);
+});
+test("controls expose current native status error without erasing historical success or opt-in", async () => {
+  const h = harness({ status: unreadableStatus });
+  const pending = h.ui.controls({ id: "p", name: "P", roots: [{ path: "E:/folder" }] });
+  await flush();
+  try {
+    const text = h.body().children.map((n) => n.textContent).join("\n");
+    assert.match(text, /현재 보관 상태 확인 실패: Snapshot manifest hash mismatch/);
+    assert.match(text, /2026-11-01T00:00:00Z/);
+    assert.equal(h.body().children[2].children[0].checked, true);
+  } finally { h.cancel(); await pending; }
 });
