@@ -14,7 +14,10 @@ fn registration_key(home: &str, project: &str) -> String {
     )
 }
 pub(super) fn should_capture(previous: &Value, fingerprint: &str, force: bool) -> bool {
-    force || previous["fingerprint"].as_str() != Some(fingerprint)
+    force
+        || previous["fingerprint"].as_str() != Some(fingerprint)
+        || (previous["error"].is_string()
+            && previous["retryAfter"].as_u64().unwrap_or(0) <= chrono_now())
 }
 impl Service {
     pub fn open_file(&self, home: &str, projects: &[String], path: &str) -> Result<(), String> {
@@ -219,21 +222,39 @@ impl Service {
             if !should_capture(&entry, &fingerprint, action != "portable_tick") {
                 return Ok(json!({"skipped":true,"integrityVerified":false}));
             }
-            // Save even a failed attempt's stamp: unchanged corruption isn't decoded every minute.
+            if entry["fingerprint"].as_str() != Some(&fingerprint) {
+                entry["consecutiveFailures"] = json!(0);
+            }
+            // Keep the attempted stamp, but only defer failed unchanged captures for
+            // a persisted bounded interval. No brittle classification of error text.
             entry["fingerprint"] = json!(fingerprint);
             entry["lastAttempt"] = json!(chrono_now());
             let result = adapter.portable_snapshot(project, anchor, job)?;
             entry["lastSuccessfulSave"] = result["lastSuccessfulSave"].clone();
             entry["error"] = Value::Null;
+            entry["retryAfter"] = Value::Null;
+            entry["consecutiveFailures"] = json!(0);
             entry["retentionWarning"] = result["retentionWarning"].clone();
             Ok(result)
         })();
         if let Err(error) = &attempt {
             entry["error"] = json!(error);
             entry["lastAttempt"] = json!(chrono_now());
+            let failures = entry["consecutiveFailures"]
+                .as_u64()
+                .unwrap_or(0)
+                .saturating_add(1)
+                .min(5);
+            entry["consecutiveFailures"] = json!(failures);
+            // 5, 10, 20, 40, then at most 60 minutes; source changes and manual
+            // saves bypass the delay, and old settings without a deadline retry once.
+            entry["retryAfter"] =
+                json!(chrono_now().saturating_add((300u64 << (failures - 1)).min(3600)));
             // Cancellation must retry; a foreground request is not an attempted source verification.
             if job.check().is_err() {
                 entry["fingerprint"] = Value::Null;
+                entry["retryAfter"] = Value::Null;
+                entry["consecutiveFailures"] = json!(0);
             }
             if !anchor.is_dir() {
                 entry["enabled"] = json!(false);
@@ -414,9 +435,20 @@ impl Service {
 mod tests {
     use super::*;
     #[test]
+    fn failed_capture_retries_after_persisted_deadline_without_source_change() {
+        let entry = json!({"fingerprint":"same","error":"temporary I/O","retryAfter":0});
+        let reloaded: Value = serde_json::from_slice(&serde_json::to_vec(&entry).unwrap()).unwrap();
+        assert!(should_capture(&reloaded, "same", false));
+        let waiting =
+            json!({"fingerprint":"same","error":"corrupt","retryAfter":chrono_now()+3600});
+        assert!(!should_capture(&waiting, "same", false));
+        assert!(should_capture(&waiting, "changed", false));
+        assert!(should_capture(&waiting, "same", true));
+    }
+    #[test]
     fn unchanged_ticks_skip_failed_and_successful_sources_but_manual_forces_verification() {
         for error in [Value::Null, json!("corrupt")] {
-            let entry = json!({"fingerprint":"same","error":error,"lastSuccessfulSave":"previous"});
+            let entry = json!({"fingerprint":"same","error":error,"lastSuccessfulSave":"previous","retryAfter":chrono_now()+3600});
             assert!(!should_capture(&entry, "same", false));
             assert!(should_capture(&entry, "changed", false));
             assert!(should_capture(&entry, "same", true));
@@ -520,7 +552,7 @@ mod tests {
         fs::create_dir(&external).unwrap();
         fs::write(external.join("asset.txt"), b"external bytes").unwrap();
         let p = adapter
-            .create("Automatic fixture", &[anchor.clone(), external])
+            .create("Automatic fixture", &[anchor.clone(), external.clone()])
             .unwrap();
         let id = uuid::Uuid::new_v4().to_string();
         let seed = root.join("seed.jsonl");
@@ -544,6 +576,39 @@ mod tests {
         assert_eq!(
             service.run("portable_tick", &args, &Job::new()).unwrap()["skipped"],
             true
+        );
+        let namespace = first["namespace"].as_str().unwrap();
+        let ns_dir = anchor.join(".codex-manager/projects").join(namespace);
+        // A source update makes the automatic capture due. Then a destination-only
+        // Windows sharing violation fails that capture; source remains fixed thereafter.
+        fs::write(external.join("asset.txt"), b"external updated bytes").unwrap();
+        use std::os::windows::fs::OpenOptionsExt;
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(ns_dir.join("snapshot.lock"))
+            .unwrap();
+        assert!(service.run("portable_tick", &args, &Job::new()).is_err());
+        let reg_key = registration_key(home.to_str().unwrap(), p["id"].as_str().unwrap());
+        let failed = service.registration(&reg_key).unwrap();
+        assert!(failed["retryAfter"].as_u64().is_some());
+        assert_eq!(
+            service.run("portable_tick", &args, &Job::new()).unwrap()["skipped"],
+            true
+        );
+        drop(held);
+        // Advance the persisted deadline rather than sleeping: no source or other state changes.
+        let mut due = failed.clone();
+        due["retryAfter"] = json!(0);
+        service.save_registration(&reg_key, due).unwrap();
+        drop(service);
+        let service = Service::new(options()).unwrap();
+        let first = service.run("portable_tick", &args, &Job::new()).unwrap();
+        assert_eq!(first["complete"], true);
+        assert_eq!(
+            service.registration(&reg_key).unwrap()["fingerprint"],
+            failed["fingerprint"]
         );
         let source = PathBuf::from(
             all_threads(&adapter.snapshot().unwrap())[0]["path"]

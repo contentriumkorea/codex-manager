@@ -150,7 +150,16 @@ fn mapped(anchor: &Path, original: &str, path: &str) -> Result<PathBuf, String> 
 /// Cheap metadata status; this does not certify current blob integrity. Use inspect before restore.
 pub fn portable_status(anchor: &Path, namespace: &str) -> Result<Value, String> {
     let dir = directory(anchor, namespace)?;
-    if !dir.join("current.json").exists() {
+    if !dir
+        .join("current.json")
+        .try_exists()
+        .map_err(|e| e.to_string())?
+    {
+        if !dir.try_exists().map_err(|e| e.to_string())? {
+            return Ok(
+                json!({"namespace":namespace,"anchor":anchor,"state":"notSaved","snapshotId":null,"lastSuccessfulSave":null,"complete":false,"integrityVerified":false,"lastAttempt":null}),
+            );
+        }
         let attempt = read_json(&dir.join("status.json"))?;
         return Ok(
             json!({"namespace":namespace,"anchor":anchor,"snapshotId":null,"lastSuccessfulSave":null,"complete":false,"integrityVerified":false,"project":attempt["project"],"lastAttempt":attempt}),

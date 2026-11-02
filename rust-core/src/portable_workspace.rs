@@ -105,26 +105,192 @@ fn scan(source: &Path, job: &Job) -> Result<Tree, String> {
     tree.files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(tree)
 }
-fn copy_payload(source: &Path, destination: &Path, tree: &Tree, job: &Job) -> Result<(), String> {
-    ensure_plain(destination)?;
-    fs::create_dir(destination).map_err(|e| e.to_string())?;
+// Each stage records its directory identities before copying and a durable receipt
+// for every completed file. Recovery never infers ownership from a partial name.
+fn copy_payload(source: &Path, stage: &Path, tree: &Tree, job: &Job) -> Result<(), String> {
+    let destination = stage.join("data");
+    let receipts = stage.join("completed");
+    fs::create_dir(&destination).map_err(|e| e.to_string())?;
+    fs::create_dir(&receipts).map_err(|e| e.to_string())?;
+    let mut directories = serde_json::Map::new();
     for d in &tree.directories {
         let p = destination.join(d);
         ensure_plain(&p)?;
-        fs::create_dir_all(p).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&p).map_err(|e| e.to_string())?;
+        directories.insert(d.clone(), json!(crate::identity(&p)?));
     }
+    write_new(&stage.join("owner.json"), &serde_json::to_vec(&json!({
+        "schema":1,"stage":crate::identity(stage)?,"data":crate::identity(&destination)?,
+        "completed":crate::identity(&receipts)?,"directories":directories,"tree":tree_value(tree)
+    })).map_err(|e|e.to_string())?)?;
     let total = crate::tree_size(tree)?;
     let mut done = 0;
     job.phase("Connected workspace copy", total);
     for e in &tree.files {
-        crate::copy_file(
+        let path = destination.join(&e.path);
+        let identity = crate::transfer::copy_file_owned(
             &source.join(&e.path),
-            &destination.join(&e.path),
+            &path,
             e,
             job,
             &mut done,
             total,
         )?;
+        let receipt = json!({"path":e.path,"size":e.size,"sha256":e.sha256,"identity":identity});
+        if let Err(error) = write_new(
+            &receipts.join(format!("{}.json", hash(e.path.as_bytes()))),
+            &serde_json::to_vec(&receipt).map_err(|e| e.to_string())?,
+        ) {
+            // This operation still has a receipt in memory if persisting it failed.
+            let mut owned = e.clone();
+            owned.identity = Some(identity);
+            let cleanup = delete_owned(&path, &owned, job);
+            return Err(format!(
+                "Workspace receipt write failed: {error}; cleanup: {cleanup:?}"
+            ));
+        }
+    }
+    Ok(())
+}
+fn remove_metadata(path: &Path, job: &Job) -> Result<(), String> {
+    ensure_plain(path)?;
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    delete_owned(
+        path,
+        &Entry {
+            path: String::new(),
+            size: bytes.len() as u64,
+            sha256: hash(&bytes),
+            identity: Some(crate::identity(path)?),
+        },
+        job,
+    )
+}
+fn owned_directory(path: &Path, expected: &Value) -> Result<(), String> {
+    ensure_plain(path)?;
+    if expected.as_str() != Some(crate::identity(path)?.as_str()) {
+        return Err("Partial workspace directory identity changed".into());
+    }
+    Ok(())
+}
+fn recover_partial(stage: &Path, job: &Job) -> Result<(), String> {
+    ensure_plain(stage)?;
+    let owner = read_json(&stage.join("owner.json"))?;
+    if owner["schema"] != 1 {
+        return Err("Unknown partial ownership receipt".into());
+    }
+    owned_directory(stage, &owner["stage"])?;
+    let data = stage.join("data");
+    let completed = stage.join("completed");
+    if data.try_exists().map_err(|e| e.to_string())? {
+        owned_directory(&data, &owner["data"])?;
+    }
+    if completed.try_exists().map_err(|e| e.to_string())? {
+        owned_directory(&completed, &owner["completed"])?;
+    }
+    let tree = tree_read(&owner["tree"])?;
+    let mut warnings = vec![];
+    for entry in &tree.files {
+        job.check()?;
+        let receipt_path = completed.join(format!("{}.json", hash(entry.path.as_bytes())));
+        if !receipt_path.try_exists().map_err(|e| e.to_string())? {
+            continue;
+        }
+        let result = (|| {
+            let r = read_json(&receipt_path)?;
+            if r["path"] != entry.path || r["size"] != entry.size || r["sha256"] != entry.sha256 {
+                return Err("Completed partial receipt changed".into());
+            }
+            let mut owned = entry.clone();
+            owned.identity = Some(string(&r, "identity")?.into());
+            let path = data.join(&entry.path);
+            if path.try_exists().map_err(|e| e.to_string())? {
+                let mut parent = Path::new(&entry.path).parent();
+                while let Some(p) = parent {
+                    if p.as_os_str().is_empty() {
+                        break;
+                    }
+                    let relative = p.to_string_lossy().replace('\\', "/");
+                    owned_directory(&data.join(p), &owner["directories"][&relative])?;
+                    parent = p.parent();
+                }
+                delete_owned(&path, &owned, job)?;
+            }
+            remove_metadata(&receipt_path, job)
+        })();
+        if let Err(e) = result {
+            warnings.push(format!("{}: {e}", entry.path));
+        }
+    }
+    job.check()?;
+    let mut dirs = tree.directories.clone();
+    dirs.sort_by_key(|s| std::cmp::Reverse(s.split('/').count()));
+    for d in dirs {
+        let p = data.join(&d);
+        if !p.try_exists().map_err(|e| e.to_string())? {
+            continue;
+        }
+        let result = owned_directory(&p, &owner["directories"][&d])
+            .and_then(|_| fs::remove_dir(&p).map_err(|e| e.to_string()));
+        if let Err(e) = result {
+            warnings.push(format!("{d}: {e}"));
+        }
+    }
+    // Unknown/edited entries keep the stage and its remaining receipts. Empty-directory
+    // removal is deliberately nonrecursive and refuses any concurrent extra entry.
+    for folder in [&data, &completed] {
+        if folder.try_exists().map_err(|e| e.to_string())?
+            && fs::read_dir(folder)
+                .map_err(|e| e.to_string())?
+                .next()
+                .is_some()
+        {
+            warnings.push("Edited or unknown partial contents retained".into());
+        }
+    }
+    for item in fs::read_dir(stage).map_err(|e| e.to_string())? {
+        let name = item.map_err(|e| e.to_string())?.file_name();
+        if !["data", "completed", "owner.json", "receipt.json"]
+            .iter()
+            .any(|n| name == *n)
+        {
+            warnings.push("Unknown stage entry retained".into());
+        }
+    }
+    if !warnings.is_empty() {
+        return Err(warnings.join("; "));
+    }
+    // A completed immutable receipt can exist after a crash just before publication.
+    let receipt = stage.join("receipt.json");
+    if receipt.try_exists().map_err(|e| e.to_string())? {
+        if read_json(&receipt)?["tree"] != owner["tree"] {
+            return Err("Changed final receipt retained".into());
+        }
+        remove_metadata(&receipt, job)?;
+    }
+    for (folder, key) in [(&data, "data"), (&completed, "completed")] {
+        if folder.try_exists().map_err(|e| e.to_string())? {
+            owned_directory(folder, &owner[key])?;
+            fs::remove_dir(folder).map_err(|e| e.to_string())?;
+        }
+    }
+    remove_metadata(&stage.join("owner.json"), job)?;
+    fs::remove_dir(stage).map_err(|e| e.to_string())
+}
+fn recover_partials(dir: &Path, job: &Job) -> Result<(), String> {
+    let store = dir.join("workspaces");
+    if !store.try_exists().map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    ensure_plain(&store)?;
+    for item in fs::read_dir(store).map_err(|e| e.to_string())? {
+        job.check()?;
+        let path = item.map_err(|e| e.to_string())?.path();
+        if path.extension().is_some_and(|e| e == "partial") {
+            // Retained-content warnings are returned by collection after publication.
+            let _ = recover_partial(&path, job);
+            job.check()?;
+        }
     }
     Ok(())
 }
@@ -153,6 +319,7 @@ pub(super) fn capture(
     roots: &[PathBuf],
     job: &Job,
 ) -> Result<Vec<Value>, String> {
+    recover_partials(dir, job)?;
     let mut external = vec![];
     for r in roots {
         require_directory(r)?;
@@ -190,7 +357,7 @@ pub(super) fn capture(
             fs::create_dir_all(&store).map_err(|e| e.to_string())?;
             let stage = store.join(format!(".{}.partial", uuid::Uuid::new_v4()));
             fs::create_dir(&stage).map_err(|e| e.to_string())?;
-            copy_payload(r, &stage.join("data"), &tree, job)?;
+            copy_payload(r, &stage, &tree, job)?;
             if tree_value(&scan(r, job)?) != tv
                 || tree_value(&crate::scan_tree(&stage.join("data"), job)?) != tv
             {
@@ -385,6 +552,15 @@ pub(super) fn collect(dir: &Path, manifests: &[Value], job: &Job) -> Result<(), 
         if retained.contains(key) {
             continue;
         }
+        if p.extension().is_some_and(|e| e == "partial") {
+            if let Err(error) = recover_partial(&p, job) {
+                warnings.push(format!(
+                    "Partial workspace retained: {}: {error}",
+                    p.display()
+                ));
+            }
+            continue;
+        }
         if hash_key(key).is_err() {
             warnings.push(format!(
                 "Unfinished/unowned workspace retained: {}",
@@ -402,6 +578,31 @@ pub(super) fn collect(dir: &Path, manifests: &[Value], job: &Job) -> Result<(), 
             for d in dirs {
                 ensure_plain(&data.join(&d))?;
                 fs::remove_dir(data.join(d)).map_err(|e| e.to_string())?;
+            }
+            // Capture-only receipts are retained with the immutable payload so a crash
+            // before rename always has recovery evidence; verify them before removal.
+            if p.join("owner.json")
+                .try_exists()
+                .map_err(|e| e.to_string())?
+            {
+                let owner = read_json(&p.join("owner.json"))?;
+                if owner["tree"] != tree_value(&tree) {
+                    return Err("Changed owner receipt retained".into());
+                }
+                let completed = p.join("completed");
+                for entry in &tree.files {
+                    let receipt = completed.join(format!("{}.json", hash(entry.path.as_bytes())));
+                    let r = read_json(&receipt)?;
+                    if r["path"] != entry.path
+                        || r["sha256"] != entry.sha256
+                        || r["size"] != entry.size
+                    {
+                        return Err("Changed completion receipt retained".into());
+                    }
+                    remove_metadata(&receipt, job)?;
+                }
+                fs::remove_dir(&completed).map_err(|e| e.to_string())?;
+                remove_metadata(&p.join("owner.json"), job)?;
             }
             fs::remove_dir(&data).map_err(|e| e.to_string())?;
             ensure_plain(&p.join("receipt.json"))?;
@@ -439,6 +640,13 @@ pub(super) fn delete_owned(path: &Path, entry: &Entry, job: &Job) -> Result<(), 
             .share_mode(1)
             .open(path)
             .map_err(|e| e.to_string())?;
+        if entry
+            .identity
+            .as_ref()
+            .is_some_and(|id| crate::file_identity(&f).as_ref() != Ok(id))
+        {
+            return Err("Workspace identity changed; collection stopped".into());
+        }
         let mut sha = Sha256::new();
         let mut size = 0;
         let mut buf = vec![0; 1024 * 1024];
@@ -499,4 +707,77 @@ pub(super) fn require_mapped_directory(
         }
     }
     require_directory(&physical)
+}
+
+#[cfg(test)]
+mod partial_tests {
+    use super::*;
+    fn stage() -> PathBuf {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test-artifacts")
+            .join(uuid::Uuid::new_v4().to_string());
+        let source = base.join("source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested/a.txt"), b"owned a").unwrap();
+        fs::write(source.join("b.txt"), b"owned b").unwrap();
+        let stage = base.join("owned.partial");
+        fs::create_dir(&stage).unwrap();
+        let tree = scan(&source, &Job::new()).unwrap();
+        copy_payload(&source, &stage, &tree, &Job::new()).unwrap();
+        stage
+    }
+    #[test]
+    fn partial_recovery_reclaims_complete_receipts_and_respects_cancel() {
+        let stage = stage();
+        let job = Job::new();
+        job.cancel();
+        assert!(recover_partial(&stage, &job).is_err());
+        assert!(stage.join("data/b.txt").exists());
+        recover_partial(&stage, &Job::new()).unwrap();
+        assert!(!stage.exists());
+    }
+    #[test]
+    fn partial_unknown_entries_and_corrupt_receipts_survive() {
+        let stage = stage();
+        fs::write(stage.join("data/user.txt"), b"unknown").unwrap();
+        let receipt = stage
+            .join("completed")
+            .join(format!("{}.json", hash(b"b.txt")));
+        fs::write(&receipt, b"corrupt receipt").unwrap();
+        assert!(recover_partial(&stage, &Job::new()).is_err());
+        assert_eq!(fs::read(stage.join("data/user.txt")).unwrap(), b"unknown");
+        assert_eq!(fs::read(stage.join("data/b.txt")).unwrap(), b"owned b");
+        assert_eq!(fs::read(receipt).unwrap(), b"corrupt receipt");
+        assert!(!stage.join("data/nested/a.txt").exists());
+    }
+    #[test]
+    fn partial_replaced_directory_is_not_treated_as_owned() {
+        let stage = stage();
+        fs::rename(stage.join("data/nested"), stage.join("moved")).unwrap();
+        fs::create_dir(stage.join("data/nested")).unwrap();
+        fs::rename(stage.join("moved/a.txt"), stage.join("data/nested/a.txt")).unwrap();
+        assert!(recover_partial(&stage, &Job::new()).is_err());
+        assert!(stage.join("data/nested/a.txt").exists());
+    }
+    #[test]
+    fn partial_recovery_resumes_after_empty_owned_directories_were_removed() {
+        let stage = stage();
+        let owner = read_json(&stage.join("owner.json")).unwrap();
+        let tree = tree_read(&owner["tree"]).unwrap();
+        for entry in &tree.files {
+            delete_owned(&stage.join("data").join(&entry.path), entry, &Job::new()).unwrap();
+            remove_metadata(
+                &stage
+                    .join("completed")
+                    .join(format!("{}.json", hash(entry.path.as_bytes()))),
+                &Job::new(),
+            )
+            .unwrap();
+        }
+        fs::remove_dir(stage.join("data/nested")).unwrap();
+        fs::remove_dir(stage.join("data")).unwrap();
+        fs::remove_dir(stage.join("completed")).unwrap();
+        recover_partial(&stage, &Job::new()).unwrap();
+        assert!(!stage.exists());
+    }
 }

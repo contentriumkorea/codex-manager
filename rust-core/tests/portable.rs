@@ -593,3 +593,116 @@ fn missing_or_file_nested_roots_and_active_directories_keep_latest_good() {
     );
     assert!(portable_inspect(&anchor, ns, &Job::new()).is_ok());
 }
+
+#[test]
+fn never_saved_status_is_clean_but_invalid_metadata_is_visible() {
+    let (anchor, _, _) = fixture();
+    let ns = "a".repeat(64);
+    let status = portable_status(&anchor, &ns).unwrap();
+    assert_eq!(status["state"], "notSaved");
+    assert_eq!(status["complete"], false);
+    let dir = anchor.join(".codex-manager/projects").join(ns);
+    fs::create_dir_all(&dir).unwrap();
+    assert!(
+        portable_status(&anchor, &"a".repeat(64)).is_err(),
+        "existing incomplete namespace must not look never-saved"
+    );
+    fs::write(dir.join("status.json"), b"invalid").unwrap();
+    assert!(portable_status(&anchor, &"a".repeat(64)).is_err());
+}
+#[test]
+fn repeated_external_capture_cancellation_has_bounded_owned_partials() {
+    let (anchor, _, mut c) = fixture();
+    let good = snapshot(&anchor, &c);
+    let ext = anchor.parent().unwrap().join("external");
+    fs::create_dir(&ext).unwrap();
+    for i in 0..48 {
+        fs::write(ext.join(format!("{i:04}.bin")), vec![i as u8; 256 * 1024]).unwrap();
+    }
+    c.projects[0].project["roots"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path":ext}));
+    let store = anchor
+        .join(".codex-manager/projects")
+        .join(good["namespace"].as_str().unwrap())
+        .join("workspaces");
+    for _ in 0..3 {
+        let job = Job::new();
+        let watcher = job.clone();
+        let wait = std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            while start.elapsed().as_secs() < 20 {
+                let state = watcher.snapshot();
+                if state["phase"] == "Connected workspace copy"
+                    && state["done"].as_u64().unwrap_or(0) >= 1024 * 1024
+                {
+                    watcher.cancel();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("copy phase not observed");
+        });
+        assert!(portable_snapshot(&c, "project-one", &anchor, &job).is_err());
+        wait.join().unwrap();
+        let partials = fs::read_dir(&store)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|x| x == "partial")
+            })
+            .count();
+        assert!(partials <= 1, "owned partials grew: {partials}");
+        assert_eq!(
+            portable_status(&anchor, good["namespace"].as_str().unwrap()).unwrap()
+                ["lastSuccessfulSave"],
+            good["lastSuccessfulSave"]
+        );
+    }
+    // Edit one completed file in the interrupted owned stage. Recovery must preserve it,
+    // reclaim the other proven files and still allow a successful new snapshot.
+    let stage = fs::read_dir(&store)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "partial"))
+        .unwrap();
+    let copied = fs::read_dir(stage.join("data"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "bin"))
+        .collect::<Vec<_>>();
+    assert!(copied.len() >= 2);
+    fs::write(&copied[0], b"user edit survives").unwrap();
+    let final_save = snapshot(&anchor, &c);
+    assert_eq!(final_save["complete"], true);
+    assert!(final_save["retentionWarning"]
+        .as_str()
+        .unwrap()
+        .contains("retained"));
+    assert_eq!(fs::read(&copied[0]).unwrap(), b"user edit survives");
+    for p in &copied[1..] {
+        assert!(
+            !p.exists(),
+            "unchanged completed file not reclaimed: {}",
+            p.display()
+        );
+    }
+    assert_eq!(
+        fs::read_dir(&store)
+            .unwrap()
+            .filter(|e| e
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|x| x == "partial"))
+            .count(),
+        1
+    );
+    assert_eq!(snapshot(&anchor, &c)["complete"], true);
+    assert_eq!(fs::read(&copied[0]).unwrap(), b"user edit survives");
+}

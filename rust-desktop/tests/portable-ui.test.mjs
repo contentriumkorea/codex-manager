@@ -21,7 +21,7 @@ function harness({ changed = false, corrupt = false, status = null } = {}) {
     if (action === "portable_inspect") { if (corrupt) throw new Error("corrupt snapshot"); return { project: { name: "Saved" } }; }
     if (action === "portable_plan") { planCount++; return { ...plan, snapshotId: changed && planCount > 1 ? "two" : "one" }; }
     if (action === "portable_restore") return { projectId: "restored" };
-    if (action === "portable_status") return status ?? { registration: { enabled: true, error: "last attempt failed" }, snapshot: { complete: true, lastSuccessfulSave: "2026-11-01" } };
+    if (action === "portable_status") return (typeof status === "function" ? status(args.anchor) : status) ?? { registration: { enabled: true, error: "last attempt failed" }, snapshot: { complete: true, lastSuccessfulSave: "2026-11-01" } };
     return {};
   };
   const ui = portableUI({
@@ -66,7 +66,7 @@ test("automatic controls show a later failure even while the last good snapshot 
   assert.match(await h.ui.summary(project), /last attempt failed/);
   const pending = h.ui.controls(project); await flush();
   const text = h.body().children.map((n) => n.textContent).join("\n");
-  assert.match(text, /2026-11-01/); assert.match(text, /last attempt failed/);
+  assert.ok(text.includes(new Date("2026-11-01").toLocaleString())); assert.match(text, /last attempt failed/);
   h.confirm(); await pending;
   assert.equal(h.calls.at(-1).action, "portable_configure"); assert.equal(h.calls.at(-1).args.enabled, true);
 });
@@ -79,7 +79,7 @@ test("summary exposes current native status error while preserving historical su
   const h = harness({ status: unreadableStatus });
   const text = await h.ui.summary({ id: "p", roots: [{ path: "E:/folder" }] });
   assert.match(text, /현재 보관 상태 확인 실패: Snapshot manifest hash mismatch/);
-  assert.match(text, /2026-11-01T00:00:00Z/);
+  assert.ok(text.includes(new Date("2026-11-01T00:00:00Z").toLocaleString()));
   assert.match(text, /자동 보관 켜짐/);
 });
 test("controls expose current native status error without erasing historical success or opt-in", async () => {
@@ -89,7 +89,32 @@ test("controls expose current native status error without erasing historical suc
   try {
     const text = h.body().children.map((n) => n.textContent).join("\n");
     assert.match(text, /현재 보관 상태 확인 실패: Snapshot manifest hash mismatch/);
-    assert.match(text, /2026-11-01T00:00:00Z/);
+    assert.ok(text.includes(new Date("2026-11-01T00:00:00Z").toLocaleString()));
     assert.equal(h.body().children[2].children[0].checked, true);
   } finally { h.cancel(); await pending; }
+});
+
+test("summary follows the configured current anchor and shows its retention or actual error", async () => {
+  for (const failed of [false, true]) {
+    const h = harness({ status: (anchor) => ({ registration: { anchor: "D:/second", enabled: true }, snapshot: anchor === "D:/second" ? { lastSuccessfulSave: "2026-11-01T03:00:00Z", lastAttempt: { retentionWarning: "edited payload retained" } } : null, statusError: anchor === "D:/first" ? "wrong root" : failed ? "actual error" : null }) });
+    const text = await h.ui.summary({ id: "p", roots: [{ path: "D:/first" }, { path: "D:/second" }] });
+    assert.deepEqual(h.calls.map(c => c.args.anchor), ["D:/first", "D:/second"]);
+    assert.ok(text.includes(new Date("2026-11-01T03:00:00Z").toLocaleString()));
+    assert.match(text, /edited payload retained/);
+    assert.equal(text.includes("actual error"), failed);
+    assert.equal(text.includes("wrong root"), false);
+  }
+});
+test("removed anchor falls back to current root and a never-saved source is clean", async () => {
+  const h = harness({ status: { registration: { anchor: "D:/removed" }, snapshot: { state: "notSaved", complete: false }, statusError: null } });
+  const text = await h.ui.summary({ id: "p", roots: [{ path: "D:/current" }] });
+  assert.deepEqual(h.calls.map(c => c.args.anchor), ["D:/current"]);
+  assert.match(text, /아직 없음/); assert.equal(text.includes("실패"), false);
+});
+test("display preserves invalid timestamps and converts epoch seconds", async () => {
+  for (const value of [1735689600, "old-success-value"]) {
+    const h = harness({ status: { registration: { lastSuccessfulSave: value } } });
+    const text = await h.ui.summary({ id: "p", roots: [{ path: "D:/current" }] });
+    assert.ok(text.includes(typeof value === "number" ? new Date(value * 1000).toLocaleString() : value));
+  }
 });

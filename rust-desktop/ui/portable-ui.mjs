@@ -1,16 +1,25 @@
 export function portableUI({ dialog, job, run, invoke, node, snapshot, error, element }) {
-  const time = (value) => value ? (typeof value === "number" ? new Date(value * 1000).toLocaleString() : String(value)) : "아직 없음";
+  const time = (value) => {
+    if (value === null || value === undefined || value === "") return "아직 없음";
+    const date = new Date(typeof value === "number" ? value * 1000 : value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  };
   const statusFailure = (status) => status.statusError ? "현재 보관 상태 확인 실패: " + status.statusError : "";
-  async function controls(project) {
-    const source = snapshot();
+  async function currentStatus(project, home) {
     const roots = project.roots ?? [];
     if (!roots.length) throw new Error("먼저 프로젝트 폴더를 연결하세요.");
     let anchor = roots[0].path;
-    let status = await job("portable_status", { home: source.home, project: project.id, anchor });
+    let status = await job("portable_status", { home, project: project.id, anchor });
     if (status.registration?.anchor && roots.some((r) => r.path === status.registration.anchor) && status.registration.anchor !== anchor) {
       anchor = status.registration.anchor;
-      status = await job("portable_status", { home: source.home, project: project.id, anchor });
+      status = await job("portable_status", { home, project: project.id, anchor });
     }
+    return { anchor, status };
+  }
+  async function controls(project) {
+    const source = snapshot();
+    const roots = project.roots ?? [];
+    let { anchor, status } = await currentStatus(project, source.home);
     const answer = await dialog("left", "대화 자동 보관", (body) => {
       const picker = node("select"); picker.setAttribute("aria-label", "대화를 보관할 프로젝트 폴더");
       for (const root of roots) { const option = node("option", root.path); option.value = root.path; picker.append(option); }
@@ -73,9 +82,10 @@ export function portableUI({ dialog, job, run, invoke, node, snapshot, error, el
   async function summary(project) {
     const root = project.roots?.[0]?.path;
     if (!root) return "대화 보관: 연결 폴더 없음";
-    const status = await job("portable_status", { home: snapshot().home, project: project.id, anchor: root });
+    const { status } = await currentStatus(project, snapshot().home);
     const failure = status.registration?.error || status.snapshot?.lastAttempt?.error;
-    return `자동 보관 ${status.registration?.enabled ? "켜짐" : "꺼짐"} · 마지막 성공 ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}${status.statusError ? "\n" + statusFailure(status) : ""}${failure ? "\n보관 실패: " + failure : ""}`;
+    const retention = status.snapshot?.lastAttempt?.retentionWarning || status.registration?.retentionWarning;
+    return `자동 보관 ${status.registration?.enabled ? "켜짐" : "꺼짐"} · 마지막 성공 ${time(status.snapshot?.lastSuccessfulSave ?? status.registration?.lastSuccessfulSave)}${status.statusError ? "\n" + statusFailure(status) : ""}${failure ? "\n보관 실패: " + failure : ""}${retention ? "\n" + retention : ""}`;
   }
   return { controls, openFolder, summary };
 }
