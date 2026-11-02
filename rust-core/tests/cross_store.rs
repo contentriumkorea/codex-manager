@@ -616,3 +616,154 @@ fn native_other_store_references_preserve_source_on_move_and_resume() {
             .any(|t| t["id"] == other_id));
     }
 }
+
+#[test]
+fn long_unicode_project_title_keeps_display_name_and_creatable_generated_components() {
+    let (root, a, b) = fixture();
+    let title = "한글🌱".repeat(85) + "끝";
+    assert_eq!(title.chars().count(), 256);
+    assert_eq!(valid_name(&title).unwrap(), title);
+    let original = root.join("source-workspace");
+    let long_root = root.join("긴🌱".repeat(80));
+    fs::rename(&original, &long_root).unwrap();
+    let db = rusqlite::Connection::open(a.store.home.join("state_5.sqlite")).unwrap();
+    db.execute("UPDATE projects SET name=?1 WHERE id='p'", [&title])
+        .unwrap();
+    db.execute(
+        "UPDATE project_roots SET path=?1 WHERE project_id='p'",
+        [long_root.to_str().unwrap()],
+    )
+    .unwrap();
+    drop(db);
+    let plan = cross_store_plan(&a, &b, &request(&root), &Job::new()).unwrap();
+    assert_eq!(plan["projects"][0]["project"]["name"], title);
+    let destination = PathBuf::from(plan["roots"][0]["destination"].as_str().unwrap());
+    for component in destination
+        .strip_prefix(root.join("destination"))
+        .unwrap()
+        .components()
+    {
+        // Windows components are limited by UTF-16 units, not scalar count.
+        assert!(
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .encode_utf16()
+                .count()
+                <= 255
+        );
+    }
+    fs::create_dir_all(&destination).unwrap();
+    assert_eq!(
+        fs::read_to_string(long_root.join("한글.txt")).unwrap(),
+        "original"
+    );
+    fs::write(destination.join("실제 파일.txt"), "creatable").unwrap();
+    assert_eq!(
+        fs::read_to_string(destination.join("실제 파일.txt")).unwrap(),
+        "creatable"
+    );
+}
+
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_unicode_multi_root_project_move_preserves_both_runtime_roots() {
+    let (root, mut a, mut b, old_project, _first, _second) = native_pair("unicode-multi-root");
+    let original = root.join("workspace-한글");
+    let secondary = root.join("보조 작업-🌱");
+    fs::create_dir(&secondary).unwrap();
+    fs::write(secondary.join("연결 자료.txt"), "두 번째 작업 폴더 내용").unwrap();
+    // Recreate one selected project with two roots and one actual conversation.
+    a.delete(
+        &[old_project["id"].as_str().unwrap().to_owned()],
+        &[],
+        true,
+        &Job::new(),
+    )
+    .unwrap();
+    let project = a
+        .create(
+            "두 작업 폴더 프로젝트",
+            &[original.clone(), secondary.clone()],
+        )
+        .unwrap();
+    let id = uuid::Uuid::new_v4().to_string();
+    let rollout = root.join("multi-root.jsonl");
+    let meta = json!({"timestamp":"2026-11-02T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-11-02T00:00:00Z","cwd":original,"runtime_workspace_roots":[original,secondary],"originator":"codex_cli_rs","cli_version":"0.0.0","source":"cli","model_provider":"openai"}});
+    let message = json!({"timestamp":"2026-11-02T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"두 폴더의 파일과 대화를 함께 이동"}]}});
+    fs::write(&rollout, format!("{meta}\n{message}\n")).unwrap();
+    a.import_thread(
+        &rollout,
+        &id,
+        &original,
+        &[original.clone(), secondary.clone()],
+        project["id"].as_str().unwrap(),
+        "한글 대화 제목 🌱",
+    )
+    .unwrap();
+    a.release_server();
+    let req = planned(
+        &a,
+        &b,
+        json!({"kind":"projects","ids":[project["id"]],"destination":root.join("대상 폴더"),"copy":false}),
+    );
+    let preview = cross_store_plan(&a, &b, &req, &Job::new()).unwrap();
+    assert_eq!(preview["roots"].as_array().unwrap().len(), 2);
+    let mapped = |source: &PathBuf| {
+        PathBuf::from(
+            preview["roots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| std::path::Path::new(r["source"].as_str().unwrap()) == source)
+                .unwrap()["destination"]
+                .as_str()
+                .unwrap(),
+        )
+    };
+    let main_target = mapped(&original);
+    let secondary_target = mapped(&secondary);
+    cross_store_transfer(&mut a, &mut b, &req, &Job::new()).unwrap();
+    assert_eq!(
+        fs::read(main_target.join("bytes.txt")).unwrap(),
+        b"verified workspace bytes"
+    );
+    assert_eq!(
+        fs::read_to_string(secondary_target.join("연결 자료.txt")).unwrap(),
+        "두 번째 작업 폴더 내용"
+    );
+    let read = b.read_thread(&id).unwrap();
+    assert_eq!(read["name"], "한글 대화 제목 🌱");
+    assert_eq!(
+        clean_path(std::path::Path::new(read["cwd"].as_str().unwrap())),
+        main_target
+    );
+    let catalog = b.snapshot().unwrap();
+    assert_eq!(catalog.projects.len(), 1);
+    assert_eq!(catalog.projects[0].project["name"], "두 작업 폴더 프로젝트");
+    assert_eq!(read["projectId"], catalog.projects[0].project["id"]);
+    let target_roots = roots(&catalog.projects[0].project).unwrap();
+    assert_eq!(target_roots.len(), 2);
+    assert!(target_roots.contains(&main_target));
+    assert!(target_roots.contains(&secondary_target));
+    let imported = all_threads(&catalog)
+        .into_iter()
+        .find(|t| t["id"] == id)
+        .unwrap();
+    let imported_path = std::path::Path::new(imported["path"].as_str().unwrap());
+    let runtime = runtime_roots(imported_path)
+        .unwrap()
+        .into_iter()
+        .map(|p| clean_path(&p))
+        .collect::<Vec<_>>();
+    assert_eq!(runtime.len(), 2);
+    assert!(runtime.contains(&main_target));
+    assert!(runtime.contains(&secondary_target));
+    assert!(fs::read_to_string(imported_path)
+        .unwrap()
+        .contains("두 폴더의 파일과 대화를 함께 이동"));
+    b.release_server();
+    assert!(a.snapshot().unwrap().projects.is_empty());
+    assert!(!original.exists());
+    assert!(!secondary.exists());
+}

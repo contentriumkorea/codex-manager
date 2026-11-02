@@ -7,6 +7,20 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
+fn same_runtime_roots(a: &[PathBuf], b: &[PathBuf]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            clean_path(a)
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_lowercase()
+                == clean_path(b)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .to_lowercase()
+        })
+}
+
 fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
     v[key]
         .as_str()
@@ -385,15 +399,9 @@ impl Adapter {
                 .find(|t| t["id"] == thread["id"])
                 .ok_or("복구할 대화가 없습니다.")?;
             let actual = crate::runtime_roots_with_job(Path::new(field(&current, "path")?), job)?;
-            let same = |a: &[PathBuf], b: &[PathBuf]| {
-                a.len() == b.len()
-                    && a.iter().zip(b).all(|(a, b)| {
-                        clean_path(a).to_string_lossy().to_lowercase()
-                            == clean_path(b).to_string_lossy().to_lowercase()
-                    })
-            };
-            original_connections &= cwd == clean_path(old) && same(&actual, &original);
-            if !same(&actual, &original) && !same(&actual, &expected) {
+            original_connections &=
+                cwd == clean_path(old) && same_runtime_roots(&actual, &original);
+            if !same_runtime_roots(&actual, &original) && !same_runtime_roots(&actual, &expected) {
                 return Err(
                     "대화의 보조 작업 폴더가 이후 변경됐습니다. 현재 설정을 덮어쓰지 않습니다."
                         .into(),
@@ -561,5 +569,41 @@ impl Adapter {
             }
         }
         self.undo_removed(id, &converted, job)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_roots_accept_windows_separator_case_and_verbatim_equivalence() {
+        let planned = vec![
+            PathBuf::from(r"D:/Work\한글"),
+            PathBuf::from(r"\\server\share/Extra"),
+        ];
+        let actual = vec![
+            PathBuf::from(r"\\?\d:\work\한글"),
+            PathBuf::from(r"\\?\UNC\SERVER\SHARE\extra"),
+        ];
+        assert!(same_runtime_roots(&planned, &actual));
+    }
+
+    #[test]
+    fn runtime_roots_still_reject_additional_or_changed_roots() {
+        let expected = vec![PathBuf::from(r"D:\Work"), PathBuf::from(r"D:\Extra")];
+        assert!(!same_runtime_roots(
+            &expected,
+            &[PathBuf::from(r"D:\Work"), PathBuf::from(r"D:\Other")]
+        ));
+        assert!(!same_runtime_roots(
+            &expected,
+            &[
+                PathBuf::from(r"D:\Work"),
+                PathBuf::from(r"D:\Extra"),
+                PathBuf::from(r"D:\Additional")
+            ]
+        ));
+        assert!(!same_runtime_roots(&expected, &[PathBuf::from(r"D:\Work")]));
     }
 }
