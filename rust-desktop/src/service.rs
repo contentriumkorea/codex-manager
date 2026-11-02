@@ -416,6 +416,7 @@ impl Service {
         let readonly = [
             "scan",
             "sizes",
+            "cross_store_conclude_plan",
             "cross_store_plan",
             "discover_backups",
             "verify_backup",
@@ -586,13 +587,21 @@ impl Service {
         let home = str_arg(args, "home")?;
         let mut adapter = self.adapter(home)?;
         if [
+            "cross_store_conclude_plan",
             "cross_store_plan",
             "cross_store_transfer",
             "cross_store_resume",
+            "cross_store_conclude",
         ]
         .contains(&action)
         {
-            let target_home = if action == "cross_store_resume" {
+            let target_home = if [
+                "cross_store_resume",
+                "cross_store_conclude_plan",
+                "cross_store_conclude",
+            ]
+            .contains(&action)
+            {
                 let record = self
                     .journal
                     .operation(str_arg(args, "id")?)?
@@ -606,7 +615,13 @@ impl Service {
             };
             let mut target = self.adapter(&target_home)?;
             if let Some(root) = &self.options.test_root {
-                let checked = if action == "cross_store_resume" {
+                let checked = if [
+                    "cross_store_resume",
+                    "cross_store_conclude_plan",
+                    "cross_store_conclude",
+                ]
+                .contains(&action)
+                {
                     self.journal
                         .operation(str_arg(args, "id")?)?
                         .ok_or("전송 기록 누락")?["payload"]["request"]
@@ -630,6 +645,16 @@ impl Service {
                 }
             }
             return match action {
+                "cross_store_conclude_plan" => {
+                    cross_store_conclude_plan(&adapter, &target, str_arg(args, "id")?, job)
+                }
+                "cross_store_conclude" => cross_store_conclude(
+                    &mut adapter,
+                    &mut target,
+                    str_arg(args, "id")?,
+                    &args["expectedRevision"],
+                    job,
+                ),
                 "cross_store_plan" => cross_store_plan(&adapter, &target, args, job),
                 "cross_store_transfer" => {
                     cross_store_transfer(&mut adapter, &mut target, args, job)
@@ -852,6 +877,59 @@ fn folder_size(root: &Path, job: &Job) -> Result<u64, String> {
 #[cfg(test)]
 mod pane_tests {
     use super::*;
+    #[test]
+    fn safe_conclusion_dispatch_pins_recorded_homes_and_preview_is_readonly() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".test-artifacts")
+            .join(format!("conclusion-service-{}", uuid::Uuid::new_v4()));
+        let source = root.join("source");
+        let target = root.join("target");
+        for path in [&source, &target] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let service = Service::new(Options {
+            data: root.join("manager"),
+            home: Some(source.clone()),
+            health: None,
+            no_update: true,
+            test_root: Some(root.clone()),
+        })
+        .unwrap();
+        service
+            .add_homes(&[source.clone(), target.clone()])
+            .unwrap();
+        let id=service.journal.begin(&json!({"kind":"rust-cross-store","home":source,"sourceHome":source,"targetHome":target,"request":{"kind":"projects","destination":root.join("output")},"plan":{"sourceSqliteHome":source,"targetSqliteHome":target,"roots":[],"threads":[],"stagingBase":root.join("staging")},"resources":[format!("home:{}",source.display()),format!("home:{}",target.display())]})).unwrap();
+        let before = digest(&service.journal.path, &Job::new()).unwrap();
+        let args = json!({"home":source,"targetHome":root.join("forged"),"id":id});
+        let preview = service
+            .run("cross_store_conclude_plan", &args, &Job::new())
+            .unwrap();
+        assert_eq!(preview["targetHome"], json!(target));
+        assert_eq!(before, digest(&service.journal.path, &Job::new()).unwrap());
+        assert!(!root.join("staging").exists());
+        for child in preview["childJournals"].as_array().unwrap() {
+            assert!(!Path::new(child["path"].as_str().unwrap()).exists());
+        }
+        assert!(service
+            .run(
+                "cross_store_conclude_plan",
+                &json!({"home":target,"id":id}),
+                &Job::new()
+            )
+            .unwrap_err()
+            .contains("시작한 저장소"));
+        let result = json!({"safeConclusion":true,"transferCompleted":false,"retained":preview});
+        service
+            .journal
+            .record(&id, "cancelled", result.clone())
+            .unwrap();
+        assert_eq!(
+            service
+                .run("cross_store_conclude", &args, &Job::new())
+                .unwrap(),
+            result
+        );
+    }
     #[test]
     fn concurrent_pane_updates_preserve_homes_preferences_and_size_isolation() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

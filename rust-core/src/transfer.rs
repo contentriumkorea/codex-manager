@@ -112,6 +112,16 @@ pub fn copy_file(
     done: &mut u64,
     total: u64,
 ) -> Result<(), String> {
+    copy_file_owned(source, destination, entry, job, done, total).map(|_| ())
+}
+pub(crate) fn copy_file_owned(
+    source: &Path,
+    destination: &Path,
+    entry: &Entry,
+    job: &Job,
+    done: &mut u64,
+    total: u64,
+) -> Result<String, String> {
     job.check()?;
     ensure_plain(source)?;
     ensure_plain(destination)?;
@@ -172,11 +182,15 @@ pub fn copy_file(
     {
         return Err("복사 중 원본이 변경됐습니다. 원본과 복사본을 보존했습니다.".into());
     }
+    let published_identity = crate::identity(&temporary)?;
     if digest(&temporary, job)? != entry.sha256 {
         return Err("복사본 검증에 실패했습니다.".into());
     }
     rename_new(&temporary, destination)?;
-    Ok(())
+    if crate::identity(destination)? != published_identity {
+        return Err("복사본이 소유권 기록 전에 교체됐습니다.".into());
+    }
+    Ok(published_identity)
 }
 pub(crate) struct PartialFile {
     path: PathBuf,
@@ -308,6 +322,17 @@ pub fn resume_copy_tree(
     Ok(())
 }
 pub fn copy_tree(source: &Path, destination: &Path, tree: &Tree, job: &Job) -> Result<(), String> {
+    copy_tree_observed(source, destination, tree, job, &|_, _, _, _| Ok(()))
+}
+pub(crate) type CopyObserver<'a> =
+    dyn Fn(&Path, Option<&Path>, &str, Option<&str>) -> Result<(), String> + 'a;
+pub(crate) fn copy_tree_observed(
+    source: &Path,
+    destination: &Path,
+    tree: &Tree,
+    job: &Job,
+    copied: &CopyObserver<'_>,
+) -> Result<(), String> {
     let src = absolute(source)?;
     let dst = absolute(destination)?;
     let key = |p: &Path| {
@@ -330,14 +355,18 @@ pub fn copy_tree(source: &Path, destination: &Path, tree: &Tree, job: &Job) -> R
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::create_dir(&dst).map_err(|e| e.to_string())?;
-    for dir in &tree.directories {
+    copied(&dst, None, &crate::identity(&dst)?, None)?;
+    let mut directories = tree.directories.clone();
+    directories.sort_by_key(|p| p.split('/').count());
+    for dir in &directories {
         job.check()?;
         if !valid_bundle_path(dir) {
             return Err("잘못된 상대 경로".into());
         }
         let path = dst.join(dir);
         ensure_plain(&path)?;
-        fs::create_dir_all(path).map_err(|e| e.to_string())?;
+        fs::create_dir(&path).map_err(|e| e.to_string())?;
+        copied(&path, None, &crate::identity(&path)?, None)?;
     }
     let total = tree_size(tree)?;
     job.phase("파일 복사·검증", total);
@@ -346,13 +375,19 @@ pub fn copy_tree(source: &Path, destination: &Path, tree: &Tree, job: &Job) -> R
         if !valid_bundle_path(&entry.path) {
             return Err("잘못된 상대 경로".into());
         }
-        copy_file(
+        let owned_identity = copy_file_owned(
             &src.join(&entry.path),
             &dst.join(&entry.path),
             entry,
             job,
             &mut done,
             total,
+        )?;
+        copied(
+            &dst.join(&entry.path),
+            Some(&src.join(&entry.path)),
+            &owned_identity,
+            Some(&entry.sha256),
         )?;
     }
     job.phase("원본 변경 확인", total);

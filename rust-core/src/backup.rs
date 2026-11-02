@@ -1,7 +1,6 @@
 use crate::{
-    absolute, all_threads, copy_file, copy_tree, digest, ensure_plain, load_verified_bundle, roots,
-    runtime_roots, scan_tree, tree_size, valid_bundle_path, write_json_new, Catalog, Entry, Job,
-    Tree,
+    absolute, all_threads, digest, ensure_plain, load_verified_bundle, roots, runtime_roots,
+    scan_tree, tree_size, valid_bundle_path, write_json_new, Catalog, Entry, Job, Tree,
 };
 use serde_json::{json, Value};
 use std::{
@@ -74,7 +73,9 @@ pub fn backup_project(
     destination: &Path,
     job: &Job,
 ) -> Result<Value, String> {
-    backup_project_observed(catalog, id, destination, job, &|_| Ok(()))
+    backup_project_observed(catalog, id, destination, job, &|_| Ok(()), &|_, _, _, _| {
+        Ok(())
+    })
 }
 pub(crate) fn backup_project_observed(
     catalog: &Catalog,
@@ -82,6 +83,7 @@ pub(crate) fn backup_project_observed(
     destination: &Path,
     job: &Job,
     created: &dyn Fn(&Path) -> Result<(), String>,
+    copied: &crate::transfer::CopyObserver<'_>,
 ) -> Result<Value, String> {
     absolute(destination)?;
     if destination.exists() {
@@ -206,10 +208,21 @@ pub(crate) fn backup_project_observed(
     }
     fs::create_dir(destination).map_err(|e| e.to_string())?;
     created(destination)?;
+    for dir in ["files", "conversations"] {
+        let path = destination.join(dir);
+        fs::create_dir(&path).map_err(|e| e.to_string())?;
+        copied(&path, None, &crate::identity(&path)?, None)?;
+    }
     let mut inventory = Vec::new();
     let mut directories = Vec::new();
     for (rid, source, tree) in &captures {
-        copy_tree(source, &destination.join("files").join(rid), tree, job)?;
+        crate::transfer::copy_tree_observed(
+            source,
+            &destination.join("files").join(rid),
+            tree,
+            job,
+            copied,
+        )?;
         for e in &tree.files {
             let meta = fs::metadata(source.join(&e.path)).map_err(|e| e.to_string())?;
             let mtime = meta
@@ -241,7 +254,7 @@ pub(crate) fn backup_project_observed(
             size: fs::metadata(source).map_err(|e| e.to_string())?.len(),
             sha256: digest(source, job)?,
         };
-        copy_file(
+        let owned_identity = crate::transfer::copy_file_owned(
             source,
             &destination.join(&entry.path),
             &entry,
@@ -249,9 +262,21 @@ pub(crate) fn backup_project_observed(
             &mut done,
             total,
         )?;
+        copied(
+            &destination.join(&entry.path),
+            Some(source),
+            &owned_identity,
+            Some(&entry.sha256),
+        )?;
     }
     let manifest = json!({"format_version":1,"bundle_id":uuid::Uuid::new_v4().to_string(),"state":"complete","captured_at":chrono::Utc::now().to_rfc3339(),"project":{"id":id,"name":group.project["name"],"roots":paths,"legacy_ids":[]},"roots":captures.iter().map(|(rid,p,_)|json!({"id":rid,"original_path":p,"bundle_path":format!("files/{rid}")})).collect::<Vec<_>>(),"conversations":records,"dependencies":dependencies,"snapshot_revision":"rust-export","inventory":inventory,"directories":directories,"folder_grouped_threads":[]});
     write_json_new(&destination.join("manifest.json"), &manifest)?;
+    copied(
+        &destination.join("manifest.json"),
+        None,
+        &crate::identity(&destination.join("manifest.json"))?,
+        None,
+    )?;
     let captured = scan_tree(destination, job)?;
     let total = tree_size(&captured)?;
     job.phase("백업 검증 목록 생성", total);
@@ -271,10 +296,22 @@ pub(crate) fn backup_project_observed(
     }
     output.sync_all().map_err(|e| e.to_string())?;
     drop(output);
+    copied(
+        &destination.join("checksums.jsonl"),
+        None,
+        &crate::identity(&destination.join("checksums.jsonl"))?,
+        None,
+    )?;
     load_verified_bundle(destination, job)?;
     write_json_new(
         &destination.join("verification.json"),
         &json!({"integrity":true,"restore_verified":false,"errors":[]}),
+    )?;
+    copied(
+        &destination.join("verification.json"),
+        None,
+        &crate::identity(&destination.join("verification.json"))?,
+        None,
     )?;
     Ok(manifest)
 }

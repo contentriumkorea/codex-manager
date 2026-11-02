@@ -204,6 +204,8 @@ function historyLabel(r) {
   );
 }
 function stateLabel(r) {
+  if (r.lastEvent?.payload?.safeConclusion)
+    return "보존 후 안전 종료 (전송 미완료)";
   if (r.recovered) return "되돌림";
   return (
     {
@@ -556,8 +558,35 @@ function renderDetails() {
           "보관된 대화 복구 사본",
           formatBytes(retained.bytes) + "\n" + retained.path,
         );
-      if (r.state !== "completed")
-        body.append(button("전송 계속", () => bridge.resume(r), "primary"));
+      const concluded = r.lastEvent?.payload?.safeConclusion;
+      if (concluded) {
+        info(
+          "안전 종료",
+          "전송 완료·원상복구가 아닙니다. 현재 파일·대화와 복구 사본을 보존했습니다.",
+        );
+        const report = r.lastEvent.payload.retained;
+        info(
+          "보관된 임시·복구 경로",
+          report.retainedStaging.path + "\n" + report.recoveryPath,
+        );
+        for (const root of report.roots ?? []) {
+          info(
+            "원본 / 대상 / 보관",
+            `${root.source.path}\n${root.target.path}\n${root.hold.path}${root.sourceUnavailable ? "\n원래 위치의 파일을 사용할 수 없음 — 보관본/대상 확인 필요" : ""}`,
+          );
+        }
+        for (const t of report.conversations ?? [])
+          if (!t.sourcePresent)
+            info(
+              "원본에 없는 대화",
+              `${t.id} · 대상 ${t.targetPresent ? "있음" : "없음"} · 복구 경로 확인`,
+            );
+      }
+      if (!["completed", "cancelled"].includes(r.state)) {
+        if (!r.state.startsWith("conclu"))
+          body.append(button("전송 계속", () => bridge.resume(r), "primary"));
+        body.append(button("보존 후 안전 종료…", () => bridge.conclude(r)));
+      }
     }
     if (
       r.payload.kind !== "rust-cross-store" &&

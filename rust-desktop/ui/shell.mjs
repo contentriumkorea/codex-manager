@@ -488,6 +488,7 @@ window.codexPaneBridge = Object.freeze({
           {},
           copy,
         ),
+      conclude: (record) => concludeTransfer(pane, record),
       resume: (record) =>
         runVisible(pane, "cross_store_resume", {
           home: record.payload.sourceHome || record.payload.home,
@@ -506,6 +507,49 @@ window.codexPaneBridge = Object.freeze({
     });
   },
 });
+async function concludeTransfer(pane, record) {
+  const args = {
+    home: record.payload.sourceHome || record.payload.home,
+    targetHome: record.payload.targetHome,
+    id: record.id,
+  };
+  const preview = await job("cross_store_conclude_plan", args);
+  const confirmed = await dialog(
+    pane,
+    "전송 보존 후 안전 종료",
+    (body) => {
+      body.append(node("p", preview.warning));
+      for (const root of preview.roots ?? [])
+        body.append(
+          node(
+            "pre",
+            `원본: ${root.source.path} (${root.source.exists ? "있음" : "없음"})\n대상: ${root.target.path} (${root.target.exists ? "있음" : "없음"})\n보관: ${root.hold.path} (${root.hold.exists ? "있음" : "없음"})\n${root.action === "restore-complete-hold" ? "완전한 보관본을 비어 있는 원래 위치로 복원" : "현재 위치에서 그대로 보존"}${root.sourceUnavailable ? "\n원래 위치의 파일을 사용할 수 없음 — 대상/보관 경로에서 확인 필요" : ""}`,
+          ),
+        );
+      for (const t of preview.conversations ?? [])
+        body.append(
+          node(
+            "p",
+            `대화 ${t.id}: 원본 ${t.sourcePresent ? "있음" : "없음"} / 대상 ${t.targetPresent ? "있음" : "없음"}`,
+          ),
+        );
+      body.append(
+        node(
+          "pre",
+          `보관되는 임시 파일: ${preview.retainedStaging.path}\n대화 복구 사본: ${preview.recoveryPath}\n작업 기록: ${(preview.childJournals ?? []).map((j) => j.path).join("\n")}`,
+        ),
+      );
+      return () => true;
+    },
+    "보존 후 안전 종료",
+  );
+  if (!confirmed) return;
+  await runVisible(pane, "cross_store_conclude", {
+    ...args,
+    expectedRevision: preview.revision,
+  });
+}
+
 async function initialize() {
   if (
     initializing ||

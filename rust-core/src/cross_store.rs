@@ -474,6 +474,16 @@ pub fn cross_store_resume(
     {
         return Err("전송 기록의 두 저장소를 연결하세요.".into());
     }
+    if central
+        .events(id)?
+        .iter()
+        .any(|e| e["phase"] == "concluding")
+    {
+        return Err("안전 종료를 시작한 전송입니다. 안전 종료 미리보기를 다시 확인하세요.".into());
+    }
+    if record["state"] == "cancelled" {
+        return Err("안전 종료한 전송은 재개할 수 없습니다. 새 전송을 미리보기하세요.".into());
+    }
     if record["state"] == "completed" {
         return Ok(
             json!({"operationId":id,"sourceHome":source.store.home,"targetHome":target.store.home,"completed":true}),
@@ -529,6 +539,248 @@ pub fn cross_store_resume(
         }
     }
 }
+fn conclusion_record(source: &Adapter, target: &Adapter, id: &str) -> Result<Value, String> {
+    stores(source, target)?;
+    uuid::Uuid::parse_str(id).map_err(|_| "작업 ID 오류")?;
+    let record = source
+        .journal
+        .operation(id)?
+        .ok_or("전송 기록이 없습니다.")?;
+    let p = &record["payload"];
+    if p["kind"] != "rust-cross-store"
+        || p["sourceHome"] != json!(source.store.home)
+        || p["targetHome"] != json!(target.store.home)
+        || p["plan"]["sourceSqliteHome"] != json!(source.store.sqlite_home)
+        || p["plan"]["targetSqliteHome"] != json!(target.store.sqlite_home)
+    {
+        return Err("전송 기록의 두 저장소와 데이터베이스 위치를 연결하세요.".into());
+    }
+    Ok(record)
+}
+fn child_journals(central: &Journal, id: &str) -> Result<[Journal; 2], String> {
+    let parent = central.path.parent().ok_or("Manager 경로 누락")?;
+    Ok([
+        Journal {
+            path: parent.join(format!("cross-{id}-source.sqlite")),
+        },
+        Journal {
+            path: parent.join(format!("cross-{id}-target.sqlite")),
+        },
+    ])
+}
+fn retained_path(path: &Path, job: &Job) -> Value {
+    // Unknown/replaced/reparse artifacts must still be reportable and retained.
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            json!({"path":path,"exists":true,"identity":identity(path).ok(),"signature":signature(path,job).ok()})
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"path":path,"exists":false}),
+        Err(e) => json!({"path":path,"exists":true,"inspectionError":e.to_string()}),
+    }
+}
+/// Read-only: no locks, journal creation, SDK mutation or restoration.
+pub fn cross_store_conclude_plan(
+    source: &Adapter,
+    target: &Adapter,
+    id: &str,
+    job: &Job,
+) -> Result<Value, String> {
+    let record = conclusion_record(source, target, id)?;
+    let plan = &record["payload"]["plan"];
+    let central = &source.journal;
+    let source_snapshot = source.snapshot()?;
+    let target_snapshot = target.snapshot()?;
+    let references = protected_workspaces(&source_snapshot, job).and_then(|mut paths| {
+        paths.extend(protected_workspaces(&target_snapshot, job)?);
+        Ok(paths)
+    });
+    let mut retained = Vec::new();
+    for (i, r) in arr(plan, "roots")?.iter().enumerate() {
+        job.check()?;
+        let src = Path::new(s(r, "source")?);
+        let dst = Path::new(s(r, "destination")?);
+        let hold = hold_path(src, id, i)?;
+        let original = retained_path(src, job);
+        let held = retained_path(&hold, job);
+        let restore = original["exists"] == false
+            && held["exists"] == true
+            && references
+                .as_ref()
+                .is_ok_and(|paths| !paths.iter().any(|p| overlap(p, &hold)))
+            && event(central, id, "hold-intent", i)?.is_some()
+            && held["identity"] == r["identity"]
+            && held["signature"] == r["signature"]
+            && identities(&hold, job).ok().as_ref() == Some(&r["identities"]);
+        retained.push(json!({"source":original,"target":retained_path(dst,job),"hold":held,"action":if restore{"restore-complete-hold"}else{"retain-current"},"sourceUnavailable":original["exists"]==false && !restore}));
+    }
+    let staging = Path::new(s(plan, "stagingBase")?).join(id);
+    let children = child_journals(central, id)?
+        .iter()
+        .map(|j| {
+            Ok(json!({"path":j.path,"operations":if j.path.exists(){j.history()?}else{vec![]}}))
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+    let source_threads = all_threads(&source_snapshot);
+    let target_threads = all_threads(&target_snapshot);
+    let conversations=ids(plan,"threads")?.iter().map(|tid| {
+        let describe=|threads:&[Value]| threads.iter().find(|t|t["id"]==*tid).map(|t|json!({"thread":t,"rollout":t["path"].as_str().map(|p|retained_path(Path::new(p),job))}));
+        let source=describe(&source_threads);
+        let target=describe(&target_threads);
+        json!({"id":tid,"sourcePresent":source.is_some(),"targetPresent":target.is_some(),"source":source,"target":target})
+    }).collect::<Vec<_>>();
+    job.check()?;
+    let mut result = json!({"operationId":id,"state":record["state"],"sourceHome":source.store.home,"targetHome":target.store.home,"roots":retained,"conversations":conversations,"retainedStaging":retained_path(&staging,job),"recoveryPath":staging.join("source-recovery"),"childJournals":children,"eventRevision":revision(&json!(central.events(id)?)),"warning":"안전 종료는 전송 완료나 원상복구가 아닙니다. 이미 처리된 대화는 되돌리지 않습니다. 남은 파일과 변경·미확인 항목, 복구 사본을 보존하고 두 저장소의 작업 잠금을 해제합니다."});
+    result["revision"] = revision(&result);
+    Ok(result)
+}
+/// Stop further transfer/deletion, reconcile actual child outcomes and retain all
+/// evidence. Only a complete, identity-checked hold may return to an absent path.
+pub fn cross_store_conclude(
+    source: &mut Adapter,
+    target: &mut Adapter,
+    id: &str,
+    expected: &Value,
+    job: &Job,
+) -> Result<Value, String> {
+    let record = conclusion_record(source, target, id)?;
+    if record["state"] == "cancelled" {
+        return source
+            .journal
+            .events(id)?
+            .into_iter()
+            .rev()
+            .find(|e| e["phase"] == "cancelled")
+            .map(|e| e["payload"].clone())
+            .ok_or("종료 기록 누락".into());
+    }
+    if record["state"] == "completed" {
+        return Err("이미 완료된 전송입니다.".into());
+    }
+    lock_both(source, target)?;
+    let central = source.journal.clone();
+    central.claim(id, &ids(&record["payload"], "resources")?)?;
+    let preview = cross_store_conclude_plan(source, target, id, job)?;
+    if preview["revision"] != *expected {
+        return Err("안전 종료 미리보기 이후 상태가 변경됐습니다. 다시 확인하세요.".into());
+    }
+    central.record(id, "concluding", json!({"preview":preview}))?;
+    // A restart can retry this action after any step; resumed transfer is forbidden
+    // once safe conclusion began (its cleanup assumptions are no longer valid).
+    for (side, (adapter, journal)) in [&mut *source, &mut *target]
+        .into_iter()
+        .zip(child_journals(&central, id)?)
+        .enumerate()
+    {
+        if !journal.path.exists() {
+            continue;
+        }
+        adapter.journal = journal.clone();
+        let recovery = Path::new(s(&record["payload"]["plan"], "stagingBase")?)
+            .join(id)
+            .join("conclusion-recovery")
+            .join(if side == 0 { "source" } else { "target" });
+        let prior_recovery = adapter.recovery_override.replace(recovery);
+        let result = (|| {
+            for r in journal.history()? {
+                if ["completed", "cancelled"].contains(&r["state"].as_str().unwrap_or("")) {
+                    continue;
+                }
+                let child = s(&r, "id")?;
+                if r["payload"]["kind"] == "rust-delete" {
+                    adapter.finalize_delete(child, job)?;
+                } else {
+                    // Read actual native state, including an RPC committed before
+                    // its outcome was recorded. Sync only what exists now; do not
+                    // replay imports, legacy creation, reassignment or deletions.
+                    let store = resolve_store(&adapter.store.home)?;
+                    let native = if let Some(db) = store.database {
+                        read_database_catalog(&db)?
+                    } else {
+                        adapter.snapshot()?
+                    };
+                    let child_events = journal.events(child)?;
+                    let mut intended = child_events
+                        .iter()
+                        .filter_map(|e| e["payload"]["threadId"].as_str().map(str::to_owned))
+                        .collect::<HashSet<_>>();
+                    if r["payload"]["kind"] == "rust-legacy" {
+                        intended.extend(
+                            r["payload"]["threads"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|t| t["id"].as_str().map(str::to_owned)),
+                        );
+                    }
+                    let assignments = all_threads(&native)
+                        .iter()
+                        .filter(|t| t["id"].as_str().is_some_and(|id| intended.contains(id)))
+                        .filter(|t| {
+                            r["payload"]["kind"] != "rust-legacy" || t["projectId"].is_string()
+                        })
+                        .filter_map(|t| {
+                            Some((
+                                t["id"].as_str()?.to_owned(),
+                                t["projectId"].as_str().map(str::to_owned),
+                            ))
+                        })
+                        .collect::<HashMap<_, _>>();
+                    let mut project_ids = child_events
+                        .iter()
+                        .filter_map(|e| e["payload"]["projectId"].as_str().map(str::to_owned))
+                        .collect::<HashSet<_>>();
+                    project_ids.extend(assignments.values().flatten().cloned());
+                    let projects = native
+                        .projects
+                        .iter()
+                        .filter(|g| {
+                            g.project["id"]
+                                .as_str()
+                                .is_some_and(|id| project_ids.contains(id))
+                        })
+                        .map(|g| g.project.clone())
+                        .collect::<Vec<_>>();
+                    adapter.sync(&projects, &assignments, &[], &[])?;
+                    journal.record(child,"cancelled",json!({"safeConclusion":id,"retainedCurrent":true,"actualProjects":projects,"actualAssignments":assignments}))?;
+                }
+            }
+            Ok::<_, String>(())
+        })();
+        adapter.release_server();
+        adapter.recovery_override = prior_recovery;
+        adapter.journal = central.clone();
+        if let Err(e) = result {
+            central.record(id, "conclusion-needs-recovery", json!({"error":e}))?;
+            return Err(e);
+        }
+    }
+    for (i, r) in arr(&record["payload"]["plan"], "roots")?.iter().enumerate() {
+        if preview["roots"][i]["action"] != "restore-complete-hold" {
+            continue;
+        }
+        let src = Path::new(s(r, "source")?);
+        let hold = hold_path(src, id, i)?;
+        protected(source, target, src)?;
+        if !src.exists()
+            && identity(&hold).ok().as_ref()
+                == r["identity"].as_str().map(|v| v.to_owned()).as_ref()
+            && signature(&hold, job).ok().as_ref() == Some(&r["signature"])
+            && identities(&hold, job).ok().as_ref() == Some(&r["identities"])
+        {
+            rename_new(&hold, src)?;
+            central.record(
+                id,
+                "conclusion-root-restored",
+                json!({"index":i,"source":src,"hold":hold}),
+            )?;
+        }
+    }
+    let outcome = cross_store_conclude_plan(source, target, id, job)?;
+    let result = json!({"safeConclusion":true,"transferCompleted":false,"retained":outcome});
+    central.record(id, "cancelled", result.clone())?;
+    Ok(result)
+}
+
 fn event(central: &Journal, id: &str, phase: &str, index: usize) -> Result<Option<Value>, String> {
     Ok(central
         .events(id)?
@@ -733,6 +985,7 @@ fn execute(
             let bundle = if let Some(e) = event(central, id, "bundle-ready", i)? {
                 PathBuf::from(s(&e, "path")?)
             } else {
+                retire_incomplete_bundles(central, id, i, job)?;
                 let bundle = Path::new(s(plan, "stagingBase")?)
                     .join(format!("{id}/{i}-{}", uuid::Uuid::new_v4()));
                 central.record(id, "bundle-intent", json!({"index":i,"path":bundle}))?;
@@ -749,15 +1002,60 @@ fn execute(
                     unassigned: vec![],
                     unresolved: vec![],
                 };
-                let manifest =
-                    crate::backup::backup_project_observed(&catalog, pid, &bundle, job, &|path| {
+                let manifest = crate::backup::backup_project_observed(
+                    &catalog,
+                    pid,
+                    &bundle,
+                    job,
+                    &|path| {
                         central.record(
                             id,
                             "bundle-created",
                             json!({"index":i,"path":path,"identity":identity(path)?}),
                         )?;
                         checkpoint(source, central, id, request, "bundle-created")
-                    })?;
+                    },
+                    &|path, reference, owned_identity, copied_sha256| {
+                        if identity(path)? != owned_identity {
+                            return Err(
+                                "복사본이 소유권 기록 전에 교체됐습니다. 그대로 보관합니다.".into(),
+                            );
+                        }
+                        let file = path.is_file();
+                        let cancel_export = file
+                            && path.starts_with(bundle.join("files"))
+                            && source.isolated_checkpoint(request, "export-file-cancel")
+                            && central
+                                .events(id)?
+                                .iter()
+                                .filter(|e| e["phase"] == "bundle-intent")
+                                .count()
+                                <= request["__testCancelAttempts"].as_u64().unwrap_or(1) as usize;
+                        if cancel_export {
+                            job.cancel();
+                        }
+
+                        // Receipt follows durable publication. A crash in this gap
+                        // leaves an unknown artifact: never adopt or delete it.
+                        // A handled cancellation after publication must not skip
+                        // this receipt. Workspace bytes were just verified by copy;
+                        // only small generated control files need a fresh digest.
+                        let checksum = if file {
+                            Some(if let Some(hash) = copied_sha256 {
+                                hash.to_owned()
+                            } else {
+                                digest(path, &Job::new())?
+                            })
+                        } else {
+                            None
+                        };
+                        central.record(id, "bundle-owned-entry", json!({"bundle":bundle,"path":path,"identity":owned_identity,"file":file,"sha256":checksum,"reference":reference,"referenceIdentity":reference.map(identity).transpose()?}))?;
+                        if cancel_export {
+                            job.check()?;
+                        }
+                        Ok(())
+                    },
+                )?;
                 if !arr(&manifest, "dependencies")?.is_empty() {
                     return Err("외부 의존성이 있는 대화는 전송할 수 없습니다.".into());
                 }
@@ -1222,6 +1520,102 @@ fn cleanup_bundles(
             };
             crate::verified_cleanup::delete_verified_file(&path, &reference, &entry, job)?;
         }
+    }
+    Ok(())
+}
+
+// Retire BEFORE allocating a replacement. Every extant entry must have its
+// original identity and content receipt; a hard-crash partial or any edit stops
+// the retry without allocating another attempt. Historical receipts are retained.
+fn retire_incomplete_bundles(
+    central: &Journal,
+    id: &str,
+    index: usize,
+    job: &Job,
+) -> Result<(), String> {
+    let events = central.events(id)?;
+    for intent in events
+        .iter()
+        .filter(|e| e["phase"] == "bundle-intent" && e["payload"]["index"] == index)
+    {
+        let bundle = Path::new(s(&intent["payload"], "path")?);
+        if !bundle.exists() {
+            continue;
+        }
+        let created = events
+            .iter()
+            .find(|e| e["phase"] == "bundle-created" && e["payload"]["path"] == json!(bundle))
+            .ok_or("임시 백업 소유권 기록 누락: 안전 종료에서 보관 위치를 확인하세요.")?;
+        if identity(bundle)? != created["payload"]["identity"] {
+            return Err("임시 백업 폴더가 교체됐습니다. 그대로 보관합니다.".into());
+        }
+        let tree = scan_tree(bundle, job)?;
+        let receipts = events
+            .iter()
+            .filter(|e| {
+                e["phase"] == "bundle-owned-entry" && e["payload"]["bundle"] == json!(bundle)
+            })
+            .map(|e| &e["payload"])
+            .collect::<Vec<_>>();
+        let receipt = |path: &Path| -> Result<&Value, String> {
+            let r = receipts
+                .iter()
+                .rev()
+                .find(|r| {
+                    r["path"]
+                        .as_str()
+                        .is_some_and(|p| key(Path::new(p)) == key(path))
+                })
+                .ok_or(
+                    "미확인 임시 파일·폴더를 보존합니다. 안전 종료에서 보관 위치를 확인하세요.",
+                )?;
+            if identity(path)? != r["identity"] {
+                return Err("임시 파일·폴더가 교체됐습니다. 그대로 보관합니다.".into());
+            }
+            Ok(r)
+        };
+        // Validate the WHOLE attempt before removing any entry.
+        for dir in &tree.directories {
+            receipt(&bundle.join(dir))?;
+        }
+        for f in &tree.files {
+            let path = bundle.join(&f.path);
+            let r = receipt(&path)?;
+            if r["file"] != true || r["sha256"] != f.sha256 {
+                return Err("임시 파일이 변경됐습니다. 그대로 보관합니다.".into());
+            }
+            if let Some(reference) = r["reference"].as_str() {
+                let reference = Path::new(reference);
+                if identity(reference)? != r["referenceIdentity"]
+                    || digest(reference, job)? != f.sha256
+                {
+                    return Err("임시 파일의 원본이 변경됐습니다. 양쪽 파일을 보관합니다.".into());
+                }
+            }
+        }
+        for f in &tree.files {
+            let path = bundle.join(&f.path);
+            let r = receipt(&path)?;
+            if let Some(reference) = r["reference"].as_str() {
+                crate::verified_cleanup::delete_verified_file(&path, Path::new(reference), f, job)?;
+            } else {
+                // Generated control bytes need no recovery copy, but use the
+                // same handle-bound identity/content checked deletion primitive.
+                crate::verified_cleanup::delete_verified_file(&path, &path, f, job)?;
+            }
+        }
+        let mut dirs = tree.directories;
+        dirs.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        for dir in dirs {
+            let path = bundle.join(dir);
+            receipt(&path)?;
+            fs::remove_dir(path).map_err(|e| e.to_string())?;
+        }
+        if identity(bundle)? != created["payload"]["identity"] {
+            return Err("임시 백업 소유권 변경".into());
+        }
+        fs::remove_dir(bundle).map_err(|e| e.to_string())?;
+        central.record(id, "bundle-retired", json!({"index":index,"path":bundle}))?;
     }
     Ok(())
 }

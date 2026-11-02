@@ -763,7 +763,342 @@ fn native_unicode_multi_root_project_move_preserves_both_runtime_roots() {
         .unwrap()
         .contains("두 폴더의 파일과 대화를 함께 이동"));
     b.release_server();
+    assert!(!all_threads(&a.snapshot().unwrap())
+        .iter()
+        .any(|t| t["id"] == id));
     assert!(a.snapshot().unwrap().projects.is_empty());
     assert!(!original.exists());
     assert!(!secondary.exists());
+}
+
+fn transfer_id(a: &Adapter) -> String {
+    a.journal
+        .history()
+        .unwrap()
+        .into_iter()
+        .find(|r| r["payload"]["kind"] == "rust-cross-store")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+fn conclude(a: &mut Adapter, b: &mut Adapter, id: &str) -> Value {
+    let before = digest(&a.journal.path, &Job::new()).unwrap();
+    let preview = cross_store_conclude_plan(a, b, id, &Job::new()).unwrap();
+    assert_eq!(
+        before,
+        digest(&a.journal.path, &Job::new()).unwrap(),
+        "preview must be readonly"
+    );
+    let result = cross_store_conclude(a, b, id, &preview["revision"], &Job::new()).unwrap();
+    assert_eq!(result["safeConclusion"], true);
+    assert_eq!(result["transferCompleted"], false);
+    assert_eq!(
+        a.journal.operation(id).unwrap().unwrap()["state"],
+        "cancelled"
+    );
+    let event_count = a.journal.events(id).unwrap().len();
+    assert_eq!(
+        cross_store_conclude(a, b, id, &Value::Null, &Job::new()).unwrap(),
+        result
+    );
+    assert_eq!(a.journal.events(id).unwrap().len(), event_count);
+    assert!(cross_store_resume(a, b, id, &Job::new()).is_err());
+    result
+}
+fn harmless_both(root: &std::path::Path, a: &mut Adapter, b: &mut Adapter) {
+    for (side, adapter) in [("source", a), ("target", b)] {
+        let workspace = root.join(format!("after-{side}"));
+        fs::create_dir(&workspace).unwrap();
+        let p = adapter
+            .create("After safe conclusion", &[workspace])
+            .unwrap();
+        adapter.release_server();
+        let op = adapter
+            .rename_project(p["id"].as_str().unwrap(), "Harmless journaled rename")
+            .unwrap();
+        adapter.release_server();
+        assert_eq!(
+            adapter.journal.operation(&op).unwrap().unwrap()["state"],
+            "completed"
+        );
+    }
+}
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_safe_conclusion_preserves_conflicts_and_releases_both_homes() {
+    for case in [
+        "source-edit",
+        "target-edit",
+        "source-reference",
+        "complete-hold",
+        "partial-hold",
+        "referenced-hold",
+    ] {
+        let (root, mut a, mut b, p, first, _) = native_pair(&format!("conclude-{case}"));
+        let workspace = root.join("workspace-한글");
+        fs::write(workspace.join("extra.txt"), b"second file for partial hold").unwrap();
+        let boundary = if case.ends_with("hold") {
+            "root-held"
+        } else {
+            "target-verified"
+        };
+        let req = planned(
+            &a,
+            &b,
+            json!({"kind":"projects","ids":[p["id"]],"destination":root.join("output"),"copy":false,"__testInterruptAt":boundary}),
+        );
+        assert!(cross_store_transfer(&mut a, &mut b, &req, &Job::new()).is_err());
+        let id = transfer_id(&a);
+        let record = a.journal.operation(&id).unwrap().unwrap();
+        let destination = PathBuf::from(
+            record["payload"]["plan"]["roots"][0]["destination"]
+                .as_str()
+                .unwrap(),
+        );
+        let hold = root.join(format!(".codex-manager-transfer-{id}-0-hold"));
+        match case {
+            "source-edit" | "target-edit" => {
+                let adapter = if case == "source-edit" { &a } else { &b };
+                let t = all_threads(&adapter.snapshot().unwrap())
+                    .into_iter()
+                    .find(|t| t["id"] == first)
+                    .unwrap();
+                use std::io::Write;
+                writeln!(fs::OpenOptions::new().append(true).open(t["path"].as_str().unwrap()).unwrap(),"{{\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"legitimate new content\"}}]}}}}").unwrap();
+                fs::write(
+                    if case == "source-edit" {
+                        workspace.join("bytes.txt")
+                    } else {
+                        destination.join("bytes.txt")
+                    },
+                    b"legitimate edited workspace",
+                )
+                .unwrap();
+            }
+            "source-reference" => {
+                a.create(
+                    "New unrelated source reference",
+                    std::slice::from_ref(&workspace),
+                )
+                .unwrap();
+                a.release_server();
+            }
+            "partial-hold" => {
+                fs::remove_file(hold.join("bytes.txt")).unwrap();
+                fs::write(
+                    destination.join("bytes.txt"),
+                    b"changed target after partial cleanup",
+                )
+                .unwrap();
+            }
+            "referenced-hold" => {
+                a.create("New reference to held files", std::slice::from_ref(&hold))
+                    .unwrap();
+                a.release_server();
+                fs::write(
+                    destination.join("bytes.txt"),
+                    b"changed target with hold in use",
+                )
+                .unwrap();
+            }
+            "complete-hold" => {
+                fs::write(destination.join("bytes.txt"), b"changed target after hold").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(cross_store_resume(&mut a, &mut b, &id, &Job::new()).is_err());
+        let preview = cross_store_conclude_plan(&a, &b, &id, &Job::new()).unwrap();
+        if case == "source-edit" {
+            fs::write(workspace.join("after-preview.txt"), b"new legitimate file").unwrap();
+            assert!(
+                cross_store_conclude(&mut a, &mut b, &id, &preview["revision"], &Job::new())
+                    .unwrap_err()
+                    .contains("미리보기")
+            );
+        }
+        if case == "complete-hold" {
+            assert_eq!(preview["roots"][0]["action"], "restore-complete-hold");
+        }
+        if case == "partial-hold" {
+            assert_eq!(preview["roots"][0]["sourceUnavailable"], true);
+        }
+        if case == "complete-hold" {
+            // Model success-before-final-recording in BOTH private journals.
+            for side in ["source", "target"] {
+                let journal =
+                    Journal::open(&root.join(format!("manager/cross-{id}-{side}.sqlite"))).unwrap();
+                for r in journal.history().unwrap() {
+                    journal
+                        .record(
+                            r["id"].as_str().unwrap(),
+                            "needs_recovery",
+                            json!({"isolatedCrashAfterAppliedOutcome":true}),
+                        )
+                        .unwrap();
+                }
+            }
+        }
+        let result = conclude(&mut a, &mut b, &id);
+        if case == "complete-hold" {
+            for side in ["source", "target"] {
+                let journal =
+                    Journal::open(&root.join(format!("manager/cross-{id}-{side}.sqlite"))).unwrap();
+                assert!(journal
+                    .history()
+                    .unwrap()
+                    .iter()
+                    .all(|r| ["completed", "cancelled"].contains(&r["state"].as_str().unwrap())));
+            }
+        }
+        if case == "partial-hold" || case == "referenced-hold" {
+            assert!(!workspace.exists());
+            assert_eq!(
+                fs::read(hold.join("extra.txt")).unwrap(),
+                b"second file for partial hold"
+            );
+            assert_eq!(result["retained"]["roots"][0]["sourceUnavailable"], true);
+        } else {
+            assert!(workspace.join("extra.txt").exists());
+        }
+        if case == "source-edit" || case == "target-edit" {
+            let adapter = if case == "source-edit" { &a } else { &b };
+            let t = all_threads(&adapter.snapshot().unwrap())
+                .into_iter()
+                .find(|t| t["id"] == first)
+                .unwrap();
+            assert!(fs::read_to_string(t["path"].as_str().unwrap())
+                .unwrap()
+                .contains("legitimate new content"));
+            assert_eq!(
+                fs::read(if case == "source-edit" {
+                    workspace.join("bytes.txt")
+                } else {
+                    destination.join("bytes.txt")
+                })
+                .unwrap(),
+                b"legitimate edited workspace"
+            );
+        }
+        if case == "source-reference" {
+            assert!(a
+                .snapshot()
+                .unwrap()
+                .projects
+                .iter()
+                .any(|g| g.project["name"] == "New unrelated source reference"));
+        }
+        harmless_both(&root, &mut a, &mut b);
+    }
+}
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_interrupted_exports_are_bounded_before_retry_and_eventually_complete() {
+    let (root, mut a, mut b, p, first, _) = native_pair("bounded-exports");
+    let workspace = root.join("workspace-한글");
+    fs::write(workspace.join("a-large.bin"), vec![19u8; 2 * 1024 * 1024]).unwrap();
+    fs::write(workspace.join("z-large.bin"), vec![23u8; 2 * 1024 * 1024]).unwrap();
+    let req = planned(
+        &a,
+        &b,
+        json!({"kind":"projects","ids":[p["id"]],"destination":root.join("output"),"copy":false,"__testInterruptAt":"export-file-cancel","__testCancelAttempts":3}),
+    );
+    assert!(cross_store_transfer(&mut a, &mut b, &req, &Job::new()).is_err());
+    let id = transfer_id(&a);
+    for attempt in 1..=3 {
+        let events = a.journal.events(&id).unwrap();
+        let bundles = events
+            .iter()
+            .filter(|e| e["phase"] == "bundle-intent")
+            .map(|e| PathBuf::from(e["payload"]["path"].as_str().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(bundles.len(), attempt);
+        let live = bundles.iter().filter(|p| p.exists()).collect::<Vec<_>>();
+        assert_eq!(
+            live.len(),
+            1,
+            "old attempts must be retired before replacement export"
+        );
+        let tree = scan_tree(live[0], &Job::new()).unwrap();
+        assert_eq!(
+            tree.files.len(),
+            1,
+            "cancel after one completed file, before bundle ready"
+        );
+        assert_eq!(tree_size(&tree).unwrap(), 2 * 1024 * 1024);
+        if attempt < 3 {
+            assert!(cross_store_resume(&mut a, &mut b, &id, &Job::new()).is_err());
+        }
+    }
+    cross_store_resume(&mut a, &mut b, &id, &Job::new()).unwrap();
+    assert!(all_threads(&b.snapshot().unwrap())
+        .iter()
+        .any(|t| t["id"] == first));
+    assert!(!all_threads(&a.snapshot().unwrap())
+        .iter()
+        .any(|t| t["id"] == first));
+    assert!(!workspace.exists());
+}
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_unknown_changed_and_replaced_export_bytes_require_safe_conclusion() {
+    for case in [
+        "unknown-partial",
+        "unreceipted-complete",
+        "changed",
+        "replaced",
+    ] {
+        let (root, mut a, mut b, p, _, _) = native_pair(&format!("export-{case}"));
+        let req = planned(
+            &a,
+            &b,
+            json!({"kind":"projects","ids":[p["id"]],"destination":root.join("output"),"copy":false,"__testInterruptAt":"export-file-cancel"}),
+        );
+        assert!(cross_store_transfer(&mut a, &mut b, &req, &Job::new()).is_err());
+        let id = transfer_id(&a);
+        let bundle = PathBuf::from(
+            a.journal
+                .events(&id)
+                .unwrap()
+                .iter()
+                .find(|e| e["phase"] == "bundle-intent")
+                .unwrap()["payload"]["path"]
+                .as_str()
+                .unwrap(),
+        );
+        let file = bundle.join("files/root-01/bytes.txt");
+        let protected = if case == "unknown-partial" {
+            let unknown = bundle.join("files/root-01/.manager-hard-crash.partial");
+            fs::write(&unknown, b"unknown crash bytes").unwrap();
+            unknown
+        } else if case == "unreceipted-complete" {
+            let unknown = bundle.join("files/root-01/completed-before-receipt.txt");
+            fs::write(&unknown, b"completed copy with no ownership receipt").unwrap();
+            unknown
+        } else if case == "changed" {
+            fs::write(&file, b"legitimate edited staging").unwrap();
+            file.clone()
+        } else {
+            fs::rename(&file, bundle.join("retained-original.txt")).unwrap();
+            fs::write(&file, b"verified workspace bytes").unwrap();
+            file.clone()
+        };
+        let before = fs::read(&protected).unwrap();
+        for _ in 0..2 {
+            assert!(cross_store_resume(&mut a, &mut b, &id, &Job::new()).is_err());
+        }
+        assert_eq!(
+            a.journal
+                .events(&id)
+                .unwrap()
+                .iter()
+                .filter(|e| e["phase"] == "bundle-intent")
+                .count(),
+            1
+        );
+        conclude(&mut a, &mut b, &id);
+        assert_eq!(fs::read(&protected).unwrap(), before);
+        assert!(root.join("workspace-한글/bytes.txt").exists());
+        harmless_both(&root, &mut a, &mut b);
+    }
 }

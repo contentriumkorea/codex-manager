@@ -90,7 +90,31 @@ function harness() {
                       roots: [],
                       warnings: [],
                     }
-                  : {},
+                  : request.action === "cross_store_conclude_plan"
+                    ? {
+                        revision: "conclusion-r",
+                        warning: "안전 종료는 전송 완료나 원상복구가 아닙니다.",
+                        roots: [
+                          {
+                            source: { path: "A/source", exists: false },
+                            target: { path: "B/target", exists: true },
+                            hold: { path: "A/hold", exists: true },
+                            action: "retain-current",
+                            sourceUnavailable: true,
+                          },
+                        ],
+                        conversations: [
+                          {
+                            id: "moved",
+                            sourcePresent: false,
+                            targetPresent: true,
+                          },
+                        ],
+                        retainedStaging: { path: "B/staging" },
+                        recoveryPath: "B/recovery",
+                        childJournals: [{ path: "manager/source.sqlite" }],
+                      }
+                    : {},
             };
           }
         },
@@ -361,4 +385,58 @@ test("native ready is reported once while first-run legal consent remains unreso
   resolveConsent();
   await flush();
   assert.equal(consentFinished, true);
+});
+
+test("safe conclusion previews retained paths and unavailable originals, then commits exact preview revision", async () => {
+  const h = harness();
+  h.api.left.publish(snapshot("A"));
+  h.api.right.publish(snapshot("B"));
+  const pending = h.api.left.conclude({
+    id: "operation",
+    payload: { sourceHome: "A", targetHome: "B" },
+  });
+  await flush();
+  assert.equal(
+    h.calls.some((c) => c.args?.action === "cross_store_conclude"),
+    false,
+  );
+  const preview = h.calls.find(
+    (c) => c.args?.action === "cross_store_conclude_plan",
+  );
+  assert.equal(preview.args.args.home, "A");
+  assert.equal(preview.args.args.targetHome, "B");
+  const text = h.document
+    .getElementById("dialog-content")
+    .children.map((n) => n.textContent)
+    .join("\n");
+  for (const value of [
+    "원상복구가 아닙니다",
+    "A/source",
+    "B/target",
+    "A/hold",
+    "B/staging",
+    "B/recovery",
+    "원래 위치의 파일을 사용할 수 없음",
+    "원본 없음 / 대상 있음",
+  ])
+    assert.ok(text.includes(value), value);
+  await h.document.getElementById("dialog-form").fire("submit");
+  await pending;
+  const commit = h.calls.find((c) => c.args?.action === "cross_store_conclude");
+  assert.equal(commit.args.args.expectedRevision, "conclusion-r");
+  assert.equal(commit.args.args.id, "operation");
+});
+test("cancelling safe conclusion preview never mutates either store", async () => {
+  const h = harness();
+  const pending = h.api.right.conclude({
+    id: "operation",
+    payload: { sourceHome: "A", targetHome: "B" },
+  });
+  await flush();
+  h.document.getElementById("dialog-cancel").onclick();
+  await pending;
+  assert.equal(
+    h.calls.some((c) => c.args?.action === "cross_store_conclude"),
+    false,
+  );
 });

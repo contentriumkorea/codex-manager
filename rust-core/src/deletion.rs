@@ -11,7 +11,7 @@ impl Adapter {
         job.check()?;
         let record = self.journal.operation(id)?.ok_or("작업 기록이 없습니다.")?;
         if record["payload"]["kind"] == "rust-cross-store" {
-            return Err("저장소 간 전송은 두 저장소를 연결한 뒤 전송 계속으로 복구하세요.".into());
+            return Err("저장소 간 전송은 두 저장소를 연결한 뒤 전송 계속 또는 보존 후 안전 종료를 사용하세요.".into());
         }
         if record["payload"]["kind"] == "rust-legacy" {
             return Err("중단된 프로젝트 연결 정리는 계속 진행해 완료해야 합니다.".into());

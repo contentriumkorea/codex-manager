@@ -53,4 +53,7 @@ pub use rpc::{
 };
 
 mod cross_store;
-pub use cross_store::{cross_store_plan, cross_store_resume, cross_store_transfer};
+pub use cross_store::{
+    cross_store_conclude, cross_store_conclude_plan, cross_store_plan, cross_store_resume,
+    cross_store_transfer,
+};
