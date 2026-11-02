@@ -1102,3 +1102,31 @@ fn native_unknown_changed_and_replaced_export_bytes_require_safe_conclusion() {
         harmless_both(&root, &mut a, &mut b);
     }
 }
+
+#[test]
+fn explicitly_selected_projectless_thread_keeps_equivalent_windows_runtime_root() {
+    let (root, a, b) = fixture();
+    let tid = "00000000-0000-4000-8000-000000000199";
+    let workspace = root.join("source-workspace");
+    let rollout = root.join("synthetic.jsonl");
+    fs::write(&rollout,format!("{}\n",json!({"type":"session_meta","payload":{"id":tid,"cwd":workspace,"runtime_workspace_roots":[workspace]}}))).unwrap();
+    let db = rusqlite::Connection::open(a.store.database.as_ref().unwrap()).unwrap();
+    db.execute(
+        "INSERT INTO threads VALUES(?1,NULL,?2,?3,'Synthetic',0)",
+        rusqlite::params![
+            tid,
+            workspace.canonicalize().unwrap().to_str().unwrap(),
+            rollout.to_str().unwrap()
+        ],
+    )
+    .unwrap();
+    fs::write(
+        a.store.home.join(".codex-global-state.json"),
+        json!({"projectless-thread-ids":[tid]}).to_string(),
+    )
+    .unwrap();
+    let plan = cross_store_plan(&a,&b,&json!({"kind":"threads","ids":[tid],"destination":root.join("synthetic-output"),"copy":false}),&Job::new()).unwrap();
+    assert_eq!(plan["projects"][0]["synthetic"], true);
+    assert_eq!(plan["roots"].as_array().unwrap().len(), 1);
+    assert_eq!(plan["roots"][0]["source"], json!(clean_path(&workspace)));
+}

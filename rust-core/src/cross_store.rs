@@ -277,9 +277,9 @@ pub fn cross_store_plan(
             .collect::<Vec<_>>();
         for t in extra {
             let mut paths = runtime_roots_with_job(Path::new(s(&t, "path")?), job)?;
-            paths.push(PathBuf::from(s(&t, "cwd")?));
-            paths.sort();
-            paths.dedup();
+            paths.push(clean_path(Path::new(s(&t, "cwd")?)));
+            paths.sort_by_key(|p| key(p));
+            paths.dedup_by(|a, b| key(a) == key(b));
             let keep = paths
                 .iter()
                 .filter(|p| !paths.iter().any(|other| *p != other && within(p, other)))
@@ -1120,18 +1120,27 @@ fn execute(
                 source.finalize_delete(s(&r, "id")?, job)?;
             }
         }
-        for tid in ids(plan, "threads")? {
-            job.check()?;
-            verify_target(target, central, id, plan, job)?;
-            target.release_server();
-            check_source(source, plan, &source_alias, job)?;
-            if all_threads(&source.snapshot()?)
-                .iter()
-                .any(|t| t["id"] == tid)
-            {
-                source.delete(&[], &[tid], false, job)?;
-                source.release_server();
-            }
+        let current = all_threads(&source.snapshot()?);
+        let remaining = ids(plan, "threads")?
+            .into_iter()
+            .filter(|tid| current.iter().any(|t| t["id"] == *tid))
+            .collect::<Vec<_>>();
+        if !remaining.is_empty() {
+            // Keep the complete preview-authorized set, including protected
+            // children explicitly selected with their parents. A single durable
+            // delete plan keeps partial cleanup recoverable; each RPC still
+            // revalidates both stores, and expansion outside the plan is refused.
+            let mut checked = 0usize;
+            source.delete_checked(&[], &remaining, false, job, true, &mut |source| {
+                if checked > 0 {
+                    checkpoint(source, central, id, request, "source-delete-next")?;
+                }
+                checked += 1;
+                verify_target(target, central, id, plan, job)?;
+                target.release_server();
+                check_source(source, plan, &source_alias, job)
+            })?;
+            source.release_server();
         }
         if request["kind"] == "projects" {
             for old in &selected {

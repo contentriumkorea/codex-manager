@@ -277,7 +277,11 @@ impl Adapter {
             .filter(|g| g.project["legacy"] == true)
         {
             if !selected.iter().any(|id| {
-                group.project["id"] == *id || group.threads.iter().any(|t| t["id"] == *id)
+                group.project["id"] == *id
+                    || group
+                        .threads
+                        .iter()
+                        .any(|t| t["id"] == *id && t["projectId"] == group.project["id"])
             }) {
                 continue;
             }
@@ -644,6 +648,19 @@ impl Adapter {
         permanent: bool,
         job: &Job,
     ) -> Result<String, String> {
+        self.delete_checked(project_ids, thread_ids, permanent, job, false, &mut |_| {
+            Ok(())
+        })
+    }
+    pub(crate) fn delete_checked(
+        &mut self,
+        project_ids: &[String],
+        thread_ids: &[String],
+        permanent: bool,
+        job: &Job,
+        exact_selection: bool,
+        before_each: &mut dyn FnMut(&mut Adapter) -> Result<(), String>,
+    ) -> Result<String, String> {
         job.check()?;
         self.guard()?;
         let catalog = self.snapshot()?;
@@ -663,6 +680,13 @@ impl Adapter {
             return Err("삭제할 항목을 선택하세요.".into());
         }
         let ids = crate::expand_thread_ids(&all, &selected.into_iter().collect::<Vec<_>>())?;
+        if exact_selection
+            && (ids.len() != thread_ids.len() || ids.iter().any(|id| !thread_ids.contains(id)))
+        {
+            return Err(
+                "미리보기에서 승인하지 않은 대화 의존성이 생겼습니다. 원본을 유지합니다.".into(),
+            );
+        }
         let threads = if ids.is_empty() {
             Vec::new()
         } else {
@@ -716,6 +740,7 @@ impl Adapter {
             job.phase_items("Codex 대화 삭제·목록 반영", ids.len() as u64);
             for (i, id) in ids.iter().enumerate() {
                 job.check()?;
+                before_each(self)?;
                 if !all_threads(&self.snapshot()?)
                     .iter()
                     .any(|t| t["id"] == *id)
