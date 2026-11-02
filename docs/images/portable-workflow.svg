@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="460" viewBox="0 0 1000 460" role="img" aria-labelledby="title desc">
+  <title id="title">프로젝트 폴더 하나로 작업을 이어가는 흐름</title>
+  <desc id="desc">작업 파일과 자동 보관한 대화를 프로젝트 폴더에 함께 두고, 폴더를 다른 컴퓨터로 복사한 다음 Codex Manager에서 폴더 열기로 복원합니다.</desc>
+  <defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#edf3ff"/><stop offset="1" stop-color="#f8fafc"/></linearGradient></defs>
+  <rect width="1000" height="460" rx="24" fill="url(#bg)"/>
+  <g font-family="Malgun Gothic,Noto Sans KR,Segoe UI,sans-serif" fill="#193b66">
+    <text x="44" y="57" font-size="28" font-weight="700">폴더 하나로 작업을 이어가세요</text>
+    <text x="44" y="87" font-size="16" fill="#5c7493">프로젝트 보관·이전 흐름도</text>
+    <rect x="42" y="118" width="402" height="262" rx="20" fill="#fff" stroke="#d4e1f3"/>
+    <path d="M72 155h47l13 13h53v33H72z" fill="#c2d7fa" stroke="#8faee0"/>
+    <text x="202" y="183" font-size="23" font-weight="700">내 프로젝트</text>
+    <rect x="69" y="223" width="349" height="55" rx="12" fill="#f0f5fd"/>
+    <text x="88" y="258" font-size="21">문서 · 이미지 · 영상 · 소스</text>
+    <rect x="69" y="294" width="349" height="55" rx="12" fill="#e7f0ff"/>
+    <text x="88" y="329" font-size="21">대화 · 연결 정보 · 검증 정보</text>
+    <path d="M469 248h60m-15-14 15 14-15 14" fill="none" stroke="#527cc3" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="470" y="295" font-size="16" fill="#5c7493">통째로</text>
+    <text x="462" y="319" font-size="16" fill="#5c7493">이동·복사</text>
+    <rect x="557" y="118" width="402" height="262" rx="20" fill="#fff" stroke="#d4e1f3"/>
+    <text x="584" y="169" font-size="23" font-weight="700">다른 컴퓨터</text>
+    <rect x="584" y="198" width="348" height="65" rx="13" fill="#e7f0ff"/>
+    <text x="608" y="238" font-size="24" font-weight="700">Manager → 폴더 열기</text>
+    <text x="586" y="305" font-size="20">새 프로젝트 또는 기존 프로젝트</text>
+    <text x="586" y="340" font-size="20">파일과 대화 연결을 확인하고 복원</text>
+    <text x="44" y="421" font-size="17" fill="#5c7493">자동 보관은 Manager 실행 중 작동합니다. 복원 전 미리보기와 검증 결과를 확인하세요.</text>
+  </g>
+</svg>

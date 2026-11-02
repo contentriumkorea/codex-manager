@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "codex-manager-core"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "chrono",
  "rusqlite",
