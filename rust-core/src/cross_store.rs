@@ -173,6 +173,9 @@ pub fn cross_store_plan(
         }
     }
     let all = all_threads(&a);
+    // Separate homes may still share actual workspace paths. Every target
+    // project, cwd and secondary runtime root remains an external reference.
+    let target_workspaces = protected_workspaces(&b, job)?;
     let mut groups = Vec::<Value>::new();
     let mut selected_threads = Vec::new();
     let source_roots = a
@@ -202,7 +205,8 @@ pub fn cross_store_plan(
             .iter()
             .map(|p| absolute(Path::new(p)))
             .collect::<Result<Vec<_>, _>>()?;
-        let runtime = protected_workspaces(&a, job)?;
+        let mut runtime = protected_workspaces(&a, job)?;
+        runtime.extend(target_workspaces.iter().cloned());
         for (i, path) in paths.iter().enumerate() {
             protected(source, target, path)?;
             if !source_roots.iter().any(|r| within(path, r))
@@ -310,8 +314,11 @@ pub fn cross_store_plan(
                         Path::new(t["cwd"].as_str().unwrap_or("")).is_absolute()
                             && overlap(path, Path::new(t["cwd"].as_str().unwrap_or("")))
                     });
-                let mut retain =
-                    request["copy"] == true || kind == "threads" || other_project || remaining;
+                let mut retain = request["copy"] == true
+                    || kind == "threads"
+                    || other_project
+                    || remaining
+                    || target_workspaces.iter().any(|p| overlap(path, p));
                 for t in all
                     .iter()
                     .filter(|t| !selected_threads.iter().any(|id| t["id"] == *id))
@@ -859,15 +866,39 @@ fn execute(
         if signature(dst, job)? != r["signature"] {
             return Err("대상 파일이 변경됐습니다. 원본 정리를 중단합니다.".into());
         }
-        if src.exists() {
-            if protected_workspaces(&source.snapshot()?, job)?
-                .iter()
-                .any(|p| within(p, src))
-            {
-                return Err(
-                    "원본 폴더를 사용하는 새 프로젝트·대화가 있습니다. 원본을 유지합니다.".into(),
-                );
+        // Re-read BOTH stores immediately before destructive cleanup, also
+        // when resuming a hold created before interruption. Imported destination
+        // roots do not overlap the original path and are not mistaken for users
+        // of the source. Project transfers preserve ancestor references too;
+        // file drags retain the existing root/cwd-within-selection policy.
+        let mut references = protected_workspaces(&source.snapshot()?, job)?;
+        references.extend(protected_workspaces(&target.snapshot()?, job)?);
+        let used = |path: &Path| {
+            references.iter().any(|p| {
+                if request["kind"] == "files" {
+                    within(p, path)
+                } else {
+                    overlap(p, path)
+                }
+            })
+        };
+        if used(src) || (hold.exists() && used(&hold)) {
+            if !src.exists() && hold.exists() && used(src) {
+                // A new reference can arrive after the original was held. Only
+                // restore a complete, unchanged owned hold; partial holds stay
+                // recoverable without deleting any further bytes.
+                if event(central, id, "hold-intent", i)?.is_some()
+                    && identity(&hold)? == r["identity"]
+                    && signature(&hold, job)? == r["signature"]
+                    && identities(&hold, job)? == r["identities"]
+                {
+                    rename_new(&hold, src)?;
+                    central.record(id, "root-restored-for-reference", json!({"index":i}))?;
+                }
             }
+            return Err("두 저장소의 프로젝트·대화가 원본 폴더를 사용합니다. 원본 정리를 중단하고 파일을 유지합니다.".into());
+        }
+        if src.exists() {
             if event(central, id, "hold-intent", i)?.is_some() && hold.exists() {
                 return Err("원래 위치에 새 파일이 생겼습니다.".into());
             }

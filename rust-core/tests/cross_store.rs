@@ -465,3 +465,154 @@ fn native_legacy_conversations_materialize_and_move_idempotently() {
     assert_eq!(all_threads(&b.snapshot().unwrap()).len(), 2);
     assert_eq!(b.read_thread(&first).unwrap()["name"], "첫 대화");
 }
+#[test]
+fn target_store_references_protect_original_roots_and_file_directories() {
+    let (root, a, b) = fixture();
+    let workspace = root.join("source-workspace");
+    let directory = workspace.join("nested");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("keep.txt"), "target still uses this").unwrap();
+    let db = rusqlite::Connection::open(b.store.database.as_ref().unwrap()).unwrap();
+    db.execute(
+        "INSERT INTO projects VALUES('shared-target','Shared target')",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO project_roots VALUES('shared-target',?1)",
+        [workspace.to_str().unwrap()],
+    )
+    .unwrap();
+    assert_eq!(
+        cross_store_plan(&a, &b, &request(&root), &Job::new()).unwrap()["roots"][0]["retainSource"],
+        true
+    );
+    db.execute(
+        "DELETE FROM project_roots WHERE project_id='shared-target'",
+        [],
+    )
+    .unwrap();
+    let rollout = b.store.home.join("target-reference.jsonl");
+    let id = "00000000-0000-4000-8000-000000000121";
+    let files = json!({"kind":"files","ids":[directory],"destination":root.join("target-workspace"),"copy":false});
+    for secondary in [false, true] {
+        let cwd = if secondary {
+            root.join("target-workspace")
+        } else {
+            directory.clone()
+        };
+        let runtime = if secondary {
+            vec![cwd.clone(), directory.clone()]
+        } else {
+            vec![cwd.clone()]
+        };
+        fs::write(&rollout,format!("{}\n",json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"runtime_workspace_roots":runtime}}))).unwrap();
+        db.execute("DELETE FROM threads WHERE id=?1", [id]).unwrap();
+        db.execute(
+            "INSERT INTO threads VALUES(?1,'shared-target',?2,?3,'Target reference',0)",
+            rusqlite::params![id, cwd.to_str().unwrap(), rollout.to_str().unwrap()],
+        )
+        .unwrap();
+        assert_eq!(
+            cross_store_plan(&a, &b, &request(&root), &Job::new()).unwrap()["roots"][0]
+                ["retainSource"],
+            true
+        );
+        assert!(cross_store_plan(&a, &b, &files, &Job::new()).is_err());
+        let mut copy = files.clone();
+        copy["copy"] = json!(true);
+        assert!(cross_store_plan(&a, &b, &copy, &Job::new()).is_ok());
+    }
+}
+
+#[test]
+#[ignore = "real installed Codex, distinct isolated stores only"]
+fn native_other_store_references_preserve_source_on_move_and_resume() {
+    for boundary in [
+        "existing",
+        "target-verified",
+        "root-held",
+        "file-target-verified",
+    ] {
+        let (root, mut a, mut b, p, _, _) = native_pair(&format!("target-protection-{boundary}"));
+        let workspace = root.join("workspace-한글");
+        let files = boundary == "file-target-verified";
+        let original = if files {
+            let path = workspace.join("nested");
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("bytes.txt"), b"verified workspace bytes").unwrap();
+            path
+        } else {
+            workspace.clone()
+        };
+        let unrelated_root = root.join("unrelated-target");
+        fs::create_dir(&unrelated_root).unwrap();
+        let other = b
+            .create("Unrelated target", std::slice::from_ref(&unrelated_root))
+            .unwrap();
+        let other_id = uuid::Uuid::new_v4().to_string();
+        let rollout = root.join("unrelated-target.jsonl");
+        fs::write(&rollout,format!("{}\n",json!({"type":"session_meta","timestamp":"2026-11-02T00:00:00Z","payload":{"id":other_id,"timestamp":"2026-11-02T00:00:00Z","cwd":unrelated_root,"runtime_workspace_roots":[unrelated_root],"originator":"codex_cli_rs","cli_version":"0.0.0","source":"cli","model_provider":"openai"}}))).unwrap();
+        b.import_thread(
+            &rollout,
+            &other_id,
+            &unrelated_root,
+            std::slice::from_ref(&unrelated_root),
+            other["id"].as_str().unwrap(),
+            "Unrelated conversation",
+        )
+        .unwrap();
+        b.release_server();
+        if boundary == "existing" {
+            b.set_roots(
+                other["id"].as_str().unwrap(),
+                std::slice::from_ref(&workspace),
+            )
+            .unwrap();
+            b.release_server();
+        }
+        let req = planned(
+            &a,
+            &b,
+            json!({"kind":if files{"files"}else{"projects"},"ids":if files{json!([original])}else{json!([p["id"]])},"destination":if files{unrelated_root.clone()}else{root.join("output")},"copy":false,"__testInterruptAt":if boundary=="existing"{Value::Null}else if files{json!("target-verified")}else{json!(boundary)}}),
+        );
+        if boundary == "existing" {
+            assert_eq!(
+                cross_store_plan(&a, &b, &req, &Job::new()).unwrap()["roots"][0]["retainSource"],
+                true
+            );
+            cross_store_transfer(&mut a, &mut b, &req, &Job::new()).unwrap();
+        } else {
+            assert!(cross_store_transfer(&mut a, &mut b, &req, &Job::new())
+                .unwrap_err()
+                .contains("Isolated fixture interruption"));
+            let op = a
+                .journal
+                .history()
+                .unwrap()
+                .into_iter()
+                .find(|r| r["payload"]["kind"] == "rust-cross-store")
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            // Add a runtime reference after preview/target verification. The
+            // existing target project's own roots and imported project are unchanged.
+            let thread = all_threads(&b.snapshot().unwrap())
+                .into_iter()
+                .find(|t| t["id"] == other_id)
+                .unwrap();
+            let target_rollout = PathBuf::from(thread["path"].as_str().unwrap());
+            use std::io::Write;
+            writeln!(fs::OpenOptions::new().append(true).open(target_rollout).unwrap(),"{}",json!({"type":"turn_context","payload":{"runtime_workspace_roots":[unrelated_root,original]}})).unwrap();
+            assert!(cross_store_resume(&mut a, &mut b, &op, &Job::new()).is_err());
+        }
+        assert_eq!(
+            fs::read(original.join("bytes.txt")).unwrap(),
+            b"verified workspace bytes"
+        );
+        assert!(all_threads(&b.snapshot().unwrap())
+            .iter()
+            .any(|t| t["id"] == other_id));
+    }
+}
